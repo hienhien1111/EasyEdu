@@ -1,0 +1,158 @@
+# ─────────────────────────────────────────────────────────────────
+# EasyEdu — Docker Compose
+# ─────────────────────────────────────────────────────────────────
+# Quick start:
+#   cp .env.docker.example .env   # fill in secrets
+#   docker compose up -d          # start everything
+#   docker compose up -d postgres redis   # infra only (for local dev)
+#   docker compose logs -f api    # tail API logs
+#   docker compose down -v        # stop and remove volumes
+# ─────────────────────────────────────────────────────────────────
+
+services:
+  # ── PostgreSQL ────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: easyedu_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-easyedu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-easyedu_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-easyedu}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-easyedu} -d ${POSTGRES_DB:-easyedu}
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ─────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: easyedu_redis
+    restart: unless-stopped
+    # Conditionally enable password auth
+    command: >
+      sh -c '
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          redis-server --requirepass "$$REDIS_PASSWORD"
+        else
+          redis-server
+        fi
+      '
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      # Works with and without password
+      test:
+        - CMD-SHELL
+        - |
+          if [ -n "$$REDIS_PASSWORD" ]; then
+            redis-cli -a "$$REDIS_PASSWORD" ping
+          else
+            redis-cli ping
+          fi
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── NestJS API ────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: easyedu_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+
+      # Database — points to the postgres service
+      DATABASE_URL: >-
+        postgresql://${POSTGRES_USER:-easyedu}:${POSTGRES_PASSWORD:-easyedu_secret}@postgres:5432/${POSTGRES_DB:-easyedu}?schema=public
+
+      # Redis — points to the redis service
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+
+      # JWT
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-30d}
+
+      # App
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+
+      # Email (Resend)
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+
+      # File Storage
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-ap-southeast-1}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+
+      # Payment (PayOS)
+      PAYOS_CLIENT_ID: ${PAYOS_CLIENT_ID:-}
+      PAYOS_API_KEY: ${PAYOS_API_KEY:-}
+      PAYOS_CHECKSUM_KEY: ${PAYOS_CHECKSUM_KEY:-}
+      PAYOS_WEBHOOK_URL: ${PAYOS_WEBHOOK_URL:-}
+
+      # OTP
+      OTP_EXPIRY_MINUTES: ${OTP_EXPIRY_MINUTES:-10}
+    ports:
+      - "${API_PORT:-3001}:3001"
+    healthcheck:
+      # Uses curl (installed in the Dockerfile via apk)
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:3001/api/health
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  # ── Next.js Web ───────────────────────────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001/api}
+    container_name: easyedu_web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      # Runtime env (for server-side); public vars are already baked in at build time
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001/api}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+
+volumes:
+  postgres_data:
+    name: easyedu_postgres_data
+  redis_data:
+    name: easyedu_redis_data

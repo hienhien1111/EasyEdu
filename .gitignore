@@ -12,6 +12,8 @@ out/
 .env
 .env.local
 .env.*.local
+# Docker root env (copy from .env.docker.example)
+# .env.docker.example is intentionally tracked
 
 # Logs
 *.log
