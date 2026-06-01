@@ -35,7 +35,7 @@ function decodeJwtPayload(token: string): Record<string, any> | null {
   }
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const token = request.cookies.get("access_token")?.value;
   const isAuthPath = AUTH_PATHS.some((p) => pathname === p);
@@ -107,3 +107,6 @@ export const config = {
     "/forgot-password",
   ],
 };
+
+// Re-export proxy as default for Next.js compatibility
+export default proxy;
