@@ -11,11 +11,11 @@ type PendingQueueItem = {
 };
 
 const api = axios.create({
-  // Use /api via Next.js rewrites proxy (same-origin) so httpOnly cookies work correctly
-  // In dev: Next.js proxies /api/* → http://localhost:3001/api/*
-  baseURL: "/api",
+  // Production (Vercel): NEXT_PUBLIC_API_URL = "https://api.easyedu.study/api" → direct cross-origin
+  // Dev (local):         not set → "/api" → Next.js rewrites proxy to localhost:3001
+  baseURL: process.env.NEXT_PUBLIC_API_URL || "/api",
   headers: { "Content-Type": "application/json" },
-  // Same-origin: credentials/cookies are always sent automatically
+  // Required for httpOnly cookie auth (both same-origin dev and cross-origin production)
   withCredentials: true,
 });
 

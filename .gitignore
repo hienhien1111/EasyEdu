@@ -53,3 +53,11 @@ apps/web/tsconfig.tsbuildinfo
 
 # Antigravity / AI tools
 .antigravityignore
+
+# Personal deployment planning docs
+easyedu-aws-deployment-plan.md
+
+# Production env (real secrets — use .env.production.example as template)
+.env.production
+apps/api/.env.production
+apps/web/.env.production

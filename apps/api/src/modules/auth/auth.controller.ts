@@ -31,17 +31,20 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   /**
-   * Build cookie options. Secure=false in dev (no HTTPS), Secure=true in prod.
+   * Build cookie options.
+   * - Dev:  secure=false, no domain (localhost only)
+   * - Prod: secure=true, domain=COOKIE_DOMAIN (.easyedu.study) for subdomain sharing
    */
   private cookieOptions(maxAgeMs: number) {
+    const isProd = process.env.NODE_ENV === 'production';
+    const cookieDomain = process.env.COOKIE_DOMAIN; // e.g. '.easyedu.study'
     return {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      // 'lax' cho phép cookie được gửi khi frontend (localhost:3000) gọi API (localhost:3001)
-      // 'strict' sẽ chặn hoàn toàn cross-site cookie trong dev
+      secure: isProd,
       sameSite: 'lax' as const,
       maxAge: maxAgeMs,
       path: '/',
+      ...(isProd && cookieDomain ? { domain: cookieDomain } : {}),
     };
   }
 

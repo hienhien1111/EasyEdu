@@ -5,6 +5,9 @@ import { BullModule } from '@nestjs/bullmq';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 
 import { PrismaModule } from './database/prisma.module';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+import { RedisService } from './common/services/redis.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { ProfilesModule } from './modules/profiles/profiles.module';
@@ -68,7 +71,10 @@ import { ResponseTransformInterceptor } from './common/interceptors/response-tra
     InventoryModule,
     DashboardModule,
   ],
+  controllers: [AppController],
   providers: [
+    AppService,
+    RedisService,
     // ThrottlerGuard first — block excessive requests before JWT processing
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },

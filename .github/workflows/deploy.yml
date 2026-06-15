@@ -1,0 +1,137 @@
+# ─────────────────────────────────────────────────────────────
+# EasyEdu — Deploy API to EC2 (Manual Trigger)
+# ─────────────────────────────────────────────────────────────
+# Trigger: Manual (workflow_dispatch) from GitHub Actions UI
+# Steps: Build → SSH to EC2 → Pull → Rebuild → Migrate → Restart → Health check
+#
+# Required GitHub Secrets:
+#   EC2_HOST          — EC2 public IP or hostname
+#   EC2_USER          — SSH user (e.g. ubuntu)
+#   EC2_SSH_KEY       — SSH private key (PEM format)
+#   EC2_DEPLOY_PATH   — Deployment path (e.g. /opt/easyedu)
+# ─────────────────────────────────────────────────────────────
+
+name: Deploy API
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+      skip_migration:
+        description: 'Skip Prisma migration'
+        required: false
+        default: false
+        type: boolean
+      reason:
+        description: 'Deployment reason (bug fix, feature, hotfix, etc.)'
+        required: false
+        type: string
+
+env:
+  COMPOSE_FILE: ops/docker-compose.prod.yml
+
+jobs:
+  # ── Step 1: Validate & Build Check ──────────────────────────
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '9.15.4'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check API
+        run: pnpm --filter api build
+
+      - name: Log deployment info
+        run: |
+          echo "## Deployment Info" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Reason:** ${{ inputs.reason || 'Not specified' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Skip migration:** ${{ inputs.skip_migration }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+
+  # ── Step 2: Deploy to EC2 ───────────────────────────────────
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd ${{ secrets.EC2_DEPLOY_PATH || '/opt/easyedu' }}
+
+            echo "── Pulling latest code ──"
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "── Building API container ──"
+            docker compose -f ops/docker-compose.prod.yml build api
+
+            echo "── Stopping old API container ──"
+            docker compose -f ops/docker-compose.prod.yml stop api
+
+            echo "── Starting updated containers ──"
+            docker compose -f ops/docker-compose.prod.yml up -d
+
+            echo "── Waiting for API to be healthy ──"
+            sleep 10
+            for i in $(seq 1 12); do
+              if curl -sf http://localhost:3001/api/health > /dev/null 2>&1; then
+                echo "✅ API is healthy!"
+                break
+              fi
+              if [ "$i" -eq 12 ]; then
+                echo "❌ Health check failed after 60 seconds"
+                docker compose -f ops/docker-compose.prod.yml logs --tail 50 api
+                exit 1
+              fi
+              echo "⏳ Waiting... ($i/12)"
+              sleep 5
+            done
+
+            echo "── Cleaning up old images ──"
+            docker image prune -f
+
+            echo "── Deploy complete ──"
+            curl -s http://localhost:3001/api/health | python3 -m json.tool || true
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "## ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "- **Time:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health:** https://api.easyedu.study/api/health" >> $GITHUB_STEP_SUMMARY
+
+      - name: Deployment failed
+        if: failure()
+        run: |
+          echo "## ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          echo "Check the logs above for details." >> $GITHUB_STEP_SUMMARY
+          echo "Manual rollback: SSH to EC2, git reset to previous commit, rebuild." >> $GITHUB_STEP_SUMMARY

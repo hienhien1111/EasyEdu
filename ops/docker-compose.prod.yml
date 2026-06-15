@@ -1,0 +1,101 @@
+# ─────────────────────────────────────────────────────────────
+# EasyEdu — Production Docker Compose
+# ─────────────────────────────────────────────────────────────
+# Only runs: API + Redis + Caddy (reverse proxy)
+# PostgreSQL is on AWS RDS — NOT a container
+# Frontend is on Vercel — NOT a container
+#
+# Usage:
+#   cd /opt/easyedu
+#   docker compose -f ops/docker-compose.prod.yml up -d
+#   docker compose -f ops/docker-compose.prod.yml logs -f api
+# ─────────────────────────────────────────────────────────────
+
+services:
+  # ── Redis (JWT blacklist + BullMQ jobs) ─────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: easyedu-redis
+    restart: unless-stopped
+    # AOF persistence so BullMQ delayed jobs survive restart
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── NestJS API ──────────────────────────────────────────────
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    container_name: easyedu-api
+    restart: unless-stopped
+    env_file:
+      - ../apps/api/.env.production
+    depends_on:
+      redis:
+        condition: service_healthy
+    # expose (not ports) — only reachable via internal network (Caddy)
+    expose:
+      - "3001"
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── Caddy — reverse proxy + auto HTTPS ──────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: easyedu-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - internal
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  redis_data:
+    name: easyedu_redis_data
+  caddy_data:
+    name: easyedu_caddy_data
+  caddy_config:
+    name: easyedu_caddy_config
+
+networks:
+  internal:
+    driver: bridge
+    name: easyedu_internal

@@ -74,6 +74,18 @@ export class RedisService implements OnModuleDestroy {
     }
   }
 
+  // ─── Health Check ──────────────────────────────────────────────
+
+  /** Returns true if Redis responds to PING. Used by /health endpoint. */
+  async ping(): Promise<boolean> {
+    try {
+      const result = await this.client.ping();
+      return result === 'PONG';
+    } catch {
+      return false;
+    }
+  }
+
   onModuleDestroy() {
     this.client.quit().catch(() => {});
   }
