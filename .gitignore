@@ -58,6 +58,8 @@ apps/web/tsconfig.tsbuildinfo
 easyedu-aws-deployment-plan.md
 
 # Production env (real secrets — use .env.production.example as template)
-.env.production
+*.env.production
 apps/api/.env.production
 apps/web/.env.production
+# But DO track the example templates
+!*.env.production.example
