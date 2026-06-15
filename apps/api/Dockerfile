@@ -78,8 +78,8 @@ USER nestjs
 EXPOSE 3001
 
 # Run Prisma migrations then start server
-# prisma binary is hoisted to root node_modules/.bin by pnpm
+# pnpm places workspace dep binaries at apps/api/node_modules/.bin (workspace-local)
 CMD ["sh", "-c", \
-  "node node_modules/.bin/prisma migrate deploy \
+  "node apps/api/node_modules/.bin/prisma migrate deploy \
      --schema=apps/api/prisma/schema.prisma && \
    node apps/api/dist/main"]
