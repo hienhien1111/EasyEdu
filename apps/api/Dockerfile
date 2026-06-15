@@ -13,10 +13,12 @@ COPY apps/api/package.json ./apps/api/
 
 # Copy prisma schema BEFORE install so postinstall (prisma generate) can find it
 COPY apps/api/prisma ./apps/api/prisma
+COPY apps/api/prisma.config.ts ./apps/api/prisma.config.ts
 
-# Install all deps — postinstall (prisma generate) runs here but
-# no DATABASE_URL is needed for code generation
-RUN pnpm install --frozen-lockfile
+# Install all deps. postinstall runs `prisma generate`, so Prisma 7 needs a
+# syntactically valid DATABASE_URL even though generation does not connect.
+RUN DATABASE_URL="postgresql://easyedu:easyedu_secret@localhost:5432/easyedu?schema=public" \
+    pnpm install --frozen-lockfile
 
 # ─────────────────────────────────────────────
 # Stage 2: builder — compile TypeScript
@@ -60,10 +62,13 @@ COPY apps/api/package.json ./apps/api/
 
 # Copy prisma schema BEFORE install so postinstall (prisma generate) succeeds
 COPY apps/api/prisma ./apps/api/prisma
+COPY apps/api/prisma.config.ts ./apps/api/prisma.config.ts
 
 # Enable pnpm and install production deps only
 # PNPM_HOME needed so corepack works as root before switching user
+# postinstall runs `prisma generate`, so provide a build-time-only URL.
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate && \
+    DATABASE_URL="postgresql://easyedu:easyedu_secret@localhost:5432/easyedu?schema=public" \
     pnpm install --frozen-lockfile --prod
 
 # Copy compiled dist from builder
@@ -80,6 +85,6 @@ EXPOSE 3001
 # Run Prisma migrations then start server
 # apps/api/node_modules/.bin/prisma is a shell wrapper script — do NOT prefix with `node`
 CMD ["sh", "-c", \
-  "apps/api/node_modules/.bin/prisma migrate deploy \
-     --schema=apps/api/prisma/schema.prisma && \
-   node apps/api/dist/main"]
+  "cd apps/api && \
+   node_modules/.bin/prisma migrate deploy && \
+   node dist/src/main.js"]
