@@ -78,8 +78,8 @@ USER nestjs
 EXPOSE 3001
 
 # Run Prisma migrations then start server
-# pnpm places workspace dep binaries at apps/api/node_modules/.bin (workspace-local)
+# apps/api/node_modules/.bin/prisma is a shell wrapper script — do NOT prefix with `node`
 CMD ["sh", "-c", \
-  "node apps/api/node_modules/.bin/prisma migrate deploy \
+  "apps/api/node_modules/.bin/prisma migrate deploy \
      --schema=apps/api/prisma/schema.prisma && \
    node apps/api/dist/main"]
