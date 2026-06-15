@@ -66,17 +66,20 @@ COPY apps/api/prisma ./apps/api/prisma
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate && \
     pnpm install --frozen-lockfile --prod
 
-# Copy compiled dist and the generated Prisma client from builder
-COPY --from=builder /app/apps/api/dist              ./apps/api/dist
-COPY --from=builder /app/apps/api/node_modules/.prisma \
-                    ./apps/api/node_modules/.prisma
+# Copy compiled dist from builder
+# NOTE: .prisma (Prisma engine binaries) is NOT copied from builder because
+# the runner stage already regenerates it via postinstall (pnpm install --prod).
+# pnpm hoists .prisma to the workspace root (/app/node_modules/.prisma),
+# not to apps/api/node_modules/.prisma, so any such COPY would fail.
+COPY --from=builder /app/apps/api/dist ./apps/api/dist
 
 USER nestjs
 
 EXPOSE 3001
 
 # Run Prisma migrations then start server
+# prisma binary is hoisted to root node_modules/.bin by pnpm
 CMD ["sh", "-c", \
-  "node apps/api/node_modules/.bin/prisma migrate deploy \
+  "node node_modules/.bin/prisma migrate deploy \
      --schema=apps/api/prisma/schema.prisma && \
    node apps/api/dist/main"]
