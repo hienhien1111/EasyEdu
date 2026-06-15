@@ -11,6 +11,9 @@ WORKDIR /app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/api/package.json ./apps/api/
 
+# Copy prisma schema BEFORE install so postinstall (prisma generate) can find it
+COPY apps/api/prisma ./apps/api/prisma
+
 # Install all deps — postinstall (prisma generate) runs here but
 # no DATABASE_URL is needed for code generation
 RUN pnpm install --frozen-lockfile
