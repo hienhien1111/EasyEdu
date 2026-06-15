@@ -17,19 +17,26 @@ const ROUTE_ROLE: Record<string, string> = {
 
 // Pages that should redirect to dashboard when already authenticated
 const AUTH_PATHS = ["/login", "/register", "/forgot-password"];
+type JwtPayload = { exp?: number; role?: string };
 
 /**
  * Lightweight JWT decode (no signature verification).
  * Verification happens on the API for every actual data request.
  * We only need the payload for redirect decisions.
  */
-function decodeJwtPayload(token: string): Record<string, any> | null {
+function decodeJwtPayload(token: string): JwtPayload | null {
   try {
     const part = token.split(".")[1];
     if (!part) return null;
     // Edge Runtime has atob natively
-    const json = atob(part.replace(/-/g, "+").replace(/_/g, "/"));
-    return JSON.parse(json);
+    const normalized = part.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const json = atob(padded);
+    const payload = JSON.parse(json) as Record<string, unknown>;
+    return {
+      exp: typeof payload.exp === "number" ? payload.exp : undefined,
+      role: typeof payload.role === "string" ? payload.role : undefined,
+    };
   } catch {
     return null;
   }

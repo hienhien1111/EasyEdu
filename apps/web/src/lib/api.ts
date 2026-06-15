@@ -1,9 +1,21 @@
-import axios from "axios";
+import axios, {
+  type AxiosError,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from "axios";
+
+type RetriableRequestConfig = InternalAxiosRequestConfig & { _retry?: boolean };
+type PendingQueueItem = {
+  resolve: () => void;
+  reject: (error: unknown) => void;
+};
 
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api",
+  // Use /api via Next.js rewrites proxy (same-origin) so httpOnly cookies work correctly
+  // In dev: Next.js proxies /api/* → http://localhost:3001/api/*
+  baseURL: "/api",
   headers: { "Content-Type": "application/json" },
-  // Send httpOnly cookies automatically on every request
+  // Same-origin: credentials/cookies are always sent automatically
   withCredentials: true,
 });
 
@@ -13,9 +25,9 @@ const api = axios.create({
 // Multiple concurrent 401s are queued and resolved together.
 
 let isRefreshing = false;
-let pendingQueue: Array<{ resolve: () => void; reject: (e: any) => void }> = [];
+let pendingQueue: PendingQueueItem[] = [];
 
-function flushQueue(error: any) {
+function flushQueue(error: unknown) {
   pendingQueue.forEach(({ resolve, reject }) =>
     error ? reject(error) : resolve()
   );
@@ -24,16 +36,16 @@ function flushQueue(error: any) {
 
 api.interceptors.response.use(
   (res) => res,
-  async (err) => {
-    const original = err.config;
+  async (err: AxiosError) => {
+    const original = err.config as RetriableRequestConfig | undefined;
 
-    if (err.response?.status === 401 && !original._retry) {
-      // Don't attempt refresh for auth endpoints themselves
+    if (err.response?.status === 401 && original && !original._retry) {
+      // Auth endpoint failures should surface to the caller instead of
+      // redirecting the user back to the same page.
       if (
         original.url?.includes("/auth/refresh") ||
         original.url?.includes("/auth/login")
       ) {
-        if (typeof window !== "undefined") window.location.href = "/login";
         return Promise.reject(err);
       }
 
@@ -70,13 +82,21 @@ export default api;
 // Helper: extract data from API response wrapper
 // Backend wraps responses as: { success, data: { data: [...], meta: {} } } (paginated)
 // or: { success, data: { ... } } (single object/array)
-export const getData = <T>(res: any): T => {
+export const getData = <T>(res: AxiosResponse<unknown>): T => {
   const outer = res.data; // { success, data: ... }
-  const inner = outer?.data; // { data: [], meta: {} } or [] or object
-  if (inner !== undefined) {
-    if (inner && typeof inner === "object" && Array.isArray(inner.data))
+  if (outer && typeof outer === "object" && "data" in outer) {
+    const inner = outer.data; // { data: [], meta: {} } or [] or object
+    if (inner !== undefined) {
+      if (
+        inner &&
+        typeof inner === "object" &&
+        "data" in inner &&
+        Array.isArray(inner.data)
+      ) {
+        return inner as T;
+      }
       return inner as T;
-    return inner as T;
+    }
   }
   return outer as T;
 };

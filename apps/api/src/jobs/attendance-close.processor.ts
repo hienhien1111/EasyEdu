@@ -2,6 +2,10 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { PrismaService } from '../database/prisma.service';
+import {
+  getSessionWindow,
+  getWeekStart,
+} from '../common/utils/session-time.util';
 
 export const ATTENDANCE_CLOSE_QUEUE = 'attendance-close';
 
@@ -25,6 +29,7 @@ export class AttendanceCloseProcessor extends WorkerHost {
       where: { id: scheduleId },
       include: {
         class: { include: { enrollments: { where: { status: 'APPROVED' } } } },
+        timeSlot: true,
       },
     });
 
@@ -33,37 +38,53 @@ export class AttendanceCloseProcessor extends WorkerHost {
       return;
     }
 
-    const enrolledStudentIds = schedule.class.enrollments.map(e => e.studentId);
+    const enrolledStudentIds = schedule.class.enrollments.map(
+      (e) => e.studentId,
+    );
 
     // Get existing attendance records for this schedule
     const existing = await this.prisma.attendance.findMany({
       where: { scheduleId },
       select: { studentId: true },
     });
-    const existingIds = new Set(existing.map(a => a.studentId));
+    const existingIds = new Set(existing.map((a) => a.studentId));
 
     // Find students without attendance record
-    const missing = enrolledStudentIds.filter(id => !existingIds.has(id));
+    const missing = enrolledStudentIds.filter((id) => !existingIds.has(id));
 
     if (missing.length === 0) {
-      this.logger.log(`All ${enrolledStudentIds.length} students accounted for schedule ${scheduleId}`);
+      this.logger.log(
+        `All ${enrolledStudentIds.length} students accounted for schedule ${scheduleId}`,
+      );
       return;
     }
 
-    // Auto-mark as ABSENT_UNEXCUSED
+    // Keep unfinished students as NOT_PRESENT so the teacher can resolve them.
+    const weekStart = getWeekStart();
+    const window = getSessionWindow(schedule.timeSlot, weekStart);
+    const editDeadlineAt = new Date(
+      window.endAt.getTime() + 24 * 60 * 60 * 1000,
+    );
+
     await this.prisma.attendance.createMany({
-      data: missing.map(studentId => ({
+      data: missing.map((studentId) => ({
         scheduleId,
+        classId: schedule.classId,
+        teacherId: schedule.teacherId,
         studentId,
-        status: 'ABSENT_UNEXCUSED',
-        note: 'Auto-chốt sau 24 giờ',
-        isAutoMarked: true,
+        sessionDate: window.sessionDate,
+        sessionStartAt: window.startAt,
+        sessionEndAt: window.endAt,
+        editDeadlineAt,
+        savedAt: new Date(),
+        status: 'NOT_PRESENT',
+        note: 'Tự tạo nhắc nhở sau buổi học',
       })),
       skipDuplicates: true,
     });
 
     this.logger.log(
-      `Auto-marked ${missing.length} students as ABSENT_UNEXCUSED for schedule ${scheduleId}`,
+      `Created ${missing.length} NOT_PRESENT reminder record(s) for schedule ${scheduleId}`,
     );
   }
 }

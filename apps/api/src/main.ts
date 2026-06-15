@@ -3,7 +3,16 @@ import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
+import express from 'express';
+import { join } from 'path';
 import { AppModule } from './app.module';
+
+// ── BigInt serialization fix ───────────────────────────────────────────────
+// Prisma trả về BigInt cho các field như payosOrderCode.
+// JSON.stringify không hỗ trợ BigInt nên cần patch toJSON globally.
+(BigInt.prototype as any).toJSON = function () {
+  return this.toString();
+};
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -13,6 +22,12 @@ async function bootstrap() {
   // Security
   app.use(helmet());
   app.use(cookieParser());
+  app.use(
+    '/uploads',
+    express.static(
+      join(process.cwd(), process.env.LOCAL_UPLOAD_DIR || 'uploads'),
+    ),
+  );
 
   // CORS
   app.enableCors({

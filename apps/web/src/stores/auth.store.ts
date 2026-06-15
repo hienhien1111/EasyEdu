@@ -14,24 +14,31 @@ export interface AuthUser {
 
 interface AuthState {
   user: AuthUser | null;
+  hasHydrated: boolean;
   /** Store user info after successful login (token is in httpOnly cookie, not JS-accessible) */
   setAuth: (user: AuthUser) => void;
   /** Clear user state (backend handles cookie clearing via /auth/logout) */
   clearAuth: () => void;
   isAuthenticated: () => boolean;
+  setHasHydrated: (hasHydrated: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
       user: null,
+      hasHydrated: false,
       setAuth: (user) => set({ user }),
       clearAuth: () => set({ user: null }),
       isAuthenticated: () => !!get().user,
+      setHasHydrated: (hasHydrated) => set({ hasHydrated }),
     }),
     {
       name: "easyedu-auth",
       partialize: (state) => ({ user: state.user }),
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true);
+      },
     }
   )
 );

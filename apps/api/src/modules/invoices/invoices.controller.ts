@@ -1,13 +1,20 @@
 import {
-  Controller, Get, Post, Body, Param, Query, NotFoundException, BadRequestException,
+  Controller, Get, Post, Patch, Body, Param, Query,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { UserRole } from '@prisma/client';
-import { IsString, IsNotEmpty, IsOptional, IsDateString } from 'class-validator';
+import { InvoicePaymentMode, UserRole } from '@prisma/client';
+import {
+  IsString,
+  IsNotEmpty,
+  IsDateString,
+  IsNumber,
+  IsOptional,
+  IsEnum,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { PrismaService } from '../../database/prisma.service';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { InvoicesService } from './invoices.service';
 
 class CreateInvoiceDto {
   @ApiProperty() @IsNotEmpty() @IsString() studentId: string;
@@ -16,130 +23,174 @@ class CreateInvoiceDto {
   @ApiProperty() @IsNotEmpty() @IsDateString() periodEnd: string;
 }
 
+class MonthlyIssueDayDto {
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsNumber()
+  day?: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsDateString()
+  date?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsDateString()
+  scheduledIssueAt?: string | null;
+}
+
+class DepositDto {
+  @ApiProperty()
+  @IsNumber()
+  amount: number;
+}
+
+class ScheduleStudentInvoiceDto {
+  @ApiProperty() @IsNotEmpty() @IsString() studentId: string;
+  @ApiProperty() @IsNotEmpty() @IsDateString() scheduledIssueAt: string;
+}
+
+class IssueAllInvoicesNowDto {
+  @ApiProperty()
+  @IsNotEmpty()
+  @IsString()
+  password: string;
+}
+
+class PaymentModeDto {
+  @ApiProperty({ enum: InvoicePaymentMode })
+  @IsEnum(InvoicePaymentMode)
+  mode: InvoicePaymentMode;
+}
+
 @ApiTags('Invoices - Hóa đơn học phí')
 @ApiBearerAuth()
 @Controller('invoices')
 export class InvoicesController {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly invoicesService: InvoicesService) {}
 
-  // Admin: Create invoice for a student for a period (UC-07)
+  @Get('admin/dashboard')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin: Tổng quan hóa đơn nháp/tháng' })
+  async dashboard() {
+    return this.invoicesService.dashboard();
+  }
+
+  @Get('admin/monthly-setting')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin: Cấu hình ngày xuất hóa đơn tháng' })
+  async getMonthlySetting() {
+    return this.invoicesService.getMonthlySetting();
+  }
+
+  @Patch('admin/monthly-setting')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin: Cập nhật ngày xuất hóa đơn tháng' })
+  async updateMonthlySetting(@Body() dto: MonthlyIssueDayDto) {
+    return this.invoicesService.updateMonthlyIssueDay(dto);
+  }
+
+  @Get('admin/monthly-prompt')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin: Kiểm tra popup chọn ngày xuất hóa đơn tháng mới' })
+  async monthlyPrompt() {
+    return this.invoicesService.shouldPromptMonthlyIssueDay();
+  }
+
+  @Post('admin/monthly-prompt/seen')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin: Đánh dấu đã thấy popup chọn ngày tháng mới' })
+  async markMonthlyPromptSeen() {
+    return this.invoicesService.markMonthlyPromptSeen();
+  }
+
+  @Post('admin/sync-drafts')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin: Đồng bộ/tạo bản nháp hóa đơn tháng cho học sinh đang học' })
+  async syncDrafts() {
+    return this.invoicesService.syncMonthlyDrafts();
+  }
+
+  @Post('admin/run-due')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin: Xuất các hóa đơn đã đến ngày hẹn' })
+  async runDue() {
+    return this.invoicesService.runDueInvoices();
+  }
+
+  @Post('admin/issue-all-now')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin: Xuất tất cả hóa đơn nháp có số tiền cần thu' })
+  async issueAllNow(
+    @CurrentUser('id') adminId: string,
+    @Body() dto: IssueAllInvoicesNowDto,
+  ) {
+    return this.invoicesService.issueAllDraftsNow(adminId, dto);
+  }
+
+  @Post('admin/schedule-student')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin: Hẹn ngày xuất hóa đơn riêng cho học sinh' })
+  async scheduleStudent(@Body() dto: ScheduleStudentInvoiceDto) {
+    return this.invoicesService.scheduleStudentInvoice(dto);
+  }
+
+  @Post('admin/issue-student/:studentId')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin: Xuất hóa đơn ngay cho một học sinh' })
+  async issueStudentNow(@Param('studentId') studentId: string) {
+    return this.invoicesService.issueStudentNow(studentId);
+  }
+
   @Post()
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Tạo hóa đơn học phí (UC-07)' })
   async create(@Body() dto: CreateInvoiceDto) {
-    const periodStart = new Date(dto.periodStart);
-    const periodEnd = new Date(dto.periodEnd);
-
-    // Get student's approved classes
-    const enrollments = await this.prisma.enrollment.findMany({
-      where: { studentId: dto.studentId, status: 'APPROVED' },
-      include: { class: true },
-    });
-
-    if (enrollments.length === 0) {
-      throw new BadRequestException('Học sinh chưa có lớp học nào được duyệt');
-    }
-
-    // Calculate attended sessions per class from attendance records
-    const invoiceItems = [];
-    let totalAmount = 0;
-
-    for (const enrollment of enrollments) {
-      const cls = enrollment.class;
-
-      // Count sessions: present + absent_unexcused count for revenue
-      const attendedCount = await this.prisma.attendance.count({
-        where: {
-          studentId: dto.studentId,
-          schedule: {
-            classId: cls.id,
-            effectiveDate: { gte: periodStart, lte: periodEnd },
-          },
-          status: { in: ['PRESENT', 'ABSENT_UNEXCUSED', 'MAKEUP'] },
-        },
-      });
-
-      const amount = attendedCount * cls.tuitionPerSession;
-      totalAmount += amount;
-
-      invoiceItems.push({
-        classId: cls.id,
-        description: `${cls.name} - ${attendedCount} buổi`,
-        sessions: attendedCount,
-        unitPrice: cls.tuitionPerSession,
-        amount,
-      });
-    }
-
-    const maxPaymentTimes = enrollments.length + 1;
-
-    return this.prisma.invoice.create({
-      data: {
-        studentId: dto.studentId,
-        periodLabel: dto.periodLabel,
-        periodStart,
-        periodEnd,
-        totalAmount,
-        maxPaymentTimes,
-        items: { create: invoiceItems },
-      },
-      include: { items: { include: { class: true } } },
-    });
+    return this.invoicesService.create(dto);
   }
 
-  // Admin: List all invoices
   @Get()
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Danh sách hóa đơn' })
   async findAll(
     @Query('studentId') studentId?: string,
     @Query('status') status?: string,
+    @Query('archive') archive?: 'active' | 'archived' | 'all',
   ) {
-    return this.prisma.invoice.findMany({
-      where: { studentId, status: status as any },
-      include: {
-        student: { include: { profile: true } },
-        items: { include: { class: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    return this.invoicesService.findAll({ studentId, status, archive });
+  }
+
+  @Get('my/invoices')
+  @Roles(UserRole.STUDENT)
+  @ApiOperation({ summary: 'Học sinh: Xem hóa đơn của mình (UC-16)' })
+  async myInvoices(@CurrentUser('id') studentId: string) {
+    return this.invoicesService.myInvoices(studentId);
+  }
+
+  @Patch(':id/deposit')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin: Cập nhật tiền cọc trừ vào hóa đơn' })
+  async addDeposit(@Param('id') id: string, @Body() dto: DepositDto) {
+    return this.invoicesService.addDeposit(id, dto);
+  }
+
+  @Patch(':id/issue')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin: Xuất một hóa đơn nháp' })
+  async issue(@Param('id') id: string) {
+    return this.invoicesService.issueInvoice(id);
+  }
+
+  @Patch(':id/payment-mode')
+  @ApiOperation({ summary: 'Chọn phương thức thanh toán cho hóa đơn' })
+  async setPaymentMode(@Param('id') id: string, @Body() dto: PaymentModeDto) {
+    return this.invoicesService.setPaymentMode(id, dto.mode);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Chi tiết hóa đơn' })
   async findOne(@Param('id') id: string, @CurrentUser() user: any) {
-    const invoice = await this.prisma.invoice.findUnique({
-      where: { id },
-      include: {
-        student: { include: { profile: true } },
-        items: { include: { class: { include: { teacher: { include: { profile: true } } } } } },
-        payments: true,
-        receipts: true,
-      },
-    });
-    if (!invoice) throw new NotFoundException('Không tìm thấy hóa đơn');
-
-    // Students can only see their own invoices
-    if (user.role === 'STUDENT' && invoice.studentId !== user.id) {
-      throw new NotFoundException('Không tìm thấy hóa đơn');
-    }
-
-    return invoice;
-  }
-
-  // Student: View my invoices (UC-16)
-  @Get('my/invoices')
-  @Roles(UserRole.STUDENT)
-  @ApiOperation({ summary: 'Học sinh: Xem hóa đơn của mình (UC-16)' })
-  async myInvoices(@CurrentUser('id') studentId: string) {
-    return this.prisma.invoice.findMany({
-      where: { studentId },
-      include: {
-        items: { include: { class: { include: { teacher: { include: { profile: true } } } } } },
-        payments: true,
-        receipts: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    return this.invoicesService.findOne(id, user);
   }
 }

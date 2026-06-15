@@ -5,7 +5,7 @@ import { useAuthStore } from "@/stores/auth.store";
 
 export default function RootPage() {
   const router = useRouter();
-  const { user, isAuthenticated } = useAuthStore();
+  const { user, hasHydrated, isAuthenticated } = useAuthStore();
   const [dots, setDots] = useState(".");
 
   // Animated dots for visual feedback
@@ -17,6 +17,7 @@ export default function RootPage() {
   }, []);
 
   useEffect(() => {
+    if (!hasHydrated) return;
     if (!isAuthenticated()) {
       router.replace("/login");
     } else if (user?.role === "ADMIN") {
@@ -26,7 +27,7 @@ export default function RootPage() {
     } else {
       router.replace("/student/my-schedule");
     }
-  }, [user, isAuthenticated, router]);
+  }, [user, hasHydrated, isAuthenticated, router]);
 
   return (
     <div

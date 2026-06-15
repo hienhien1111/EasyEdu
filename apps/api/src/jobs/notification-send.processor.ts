@@ -21,6 +21,9 @@ export class NotificationSendProcessor extends WorkerHost {
 
     const notification = await this.prisma.notification.findUnique({
       where: { id: notificationId },
+      include: {
+        _count: { select: { recipients: true } },
+      },
     });
 
     if (!notification) {
@@ -33,41 +36,24 @@ export class NotificationSendProcessor extends WorkerHost {
       return;
     }
 
-    // Resolve target user IDs
-    let userIds: string[] = [];
+    let recipientCount = notification._count.recipients;
 
-    switch (notification.targetType) {
-      case 'ALL':
-        const allUsers = await this.prisma.user.findMany({
-          where: { status: 'ACTIVE' },
-          select: { id: true },
+    if (recipientCount === 0) {
+      const userIds = await this.resolveTargetUserIds(notification.targetType);
+      if (userIds.length > 0) {
+        await this.prisma.notificationRecipient.createMany({
+          data: userIds.map(userId => ({
+            notificationId,
+            userId,
+            isRead: false,
+          })),
+          skipDuplicates: true,
         });
-        userIds = allUsers.map(u => u.id);
-        break;
-
-      case 'ALL_TEACHERS':
-        const teachers = await this.prisma.user.findMany({
-          where: { role: 'TEACHER', status: 'ACTIVE' },
-          select: { id: true },
-        });
-        userIds = teachers.map(u => u.id);
-        break;
-
-      case 'ALL_STUDENTS':
-        const students = await this.prisma.user.findMany({
-          where: { role: 'STUDENT', status: 'ACTIVE' },
-          select: { id: true },
-        });
-        userIds = students.map(u => u.id);
-        break;
-
-      case 'SPECIFIC_USERS':
-        // targetUserIds stored as JSON in the notification model
-        userIds = (notification as any).targetUserIds ?? [];
-        break;
+        recipientCount = userIds.length;
+      }
     }
 
-    if (userIds.length === 0) {
+    if (recipientCount === 0) {
       this.logger.warn(`No recipients for notification ${notificationId}`);
       await this.prisma.notification.update({
         where: { id: notificationId },
@@ -76,16 +62,6 @@ export class NotificationSendProcessor extends WorkerHost {
       return;
     }
 
-    // Create recipient records
-    await this.prisma.notificationRecipient.createMany({
-      data: userIds.map(userId => ({
-        notificationId,
-        userId,
-        isRead: false,
-      })),
-      skipDuplicates: true,
-    });
-
     // Mark as sent
     await this.prisma.notification.update({
       where: { id: notificationId },
@@ -93,7 +69,22 @@ export class NotificationSendProcessor extends WorkerHost {
     });
 
     this.logger.log(
-      `Notification ${notificationId} sent to ${userIds.length} users`,
+      `Notification ${notificationId} sent to ${recipientCount} users`,
     );
+  }
+
+  private async resolveTargetUserIds(targetType: string): Promise<string[]> {
+    const where: any = { status: 'ACTIVE' };
+
+    if (targetType === 'ALL_TEACHERS') where.role = 'TEACHER';
+    if (targetType === 'ALL_STUDENTS') where.role = 'STUDENT';
+    if (targetType === 'SPECIFIC_USERS') return [];
+
+    const users = await this.prisma.user.findMany({
+      where,
+      select: { id: true },
+    });
+
+    return users.map(u => u.id);
   }
 }

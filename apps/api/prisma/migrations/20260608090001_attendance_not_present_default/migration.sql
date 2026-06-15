@@ -1,0 +1,2 @@
+ALTER TABLE "attendances"
+  ALTER COLUMN "status" SET DEFAULT 'NOT_PRESENT';

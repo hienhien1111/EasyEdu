@@ -1,13 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Eye, EyeOff, BookOpen, Lock, User, Loader2 } from "lucide-react";
+import { isAxiosError } from "axios";
 import api, { getData } from "@/lib/api";
-import { useAuthStore } from "@/stores/auth.store";
+import { type AuthUser, useAuthStore } from "@/stores/auth.store";
 
 const schema = z.object({
   username: z.string().min(1, "Vui lòng nhập tài khoản"),
@@ -15,9 +15,16 @@ const schema = z.object({
   rememberMe: z.boolean().optional(),
 });
 type FormData = z.infer<typeof schema>;
+type LoginResponse = { user: AuthUser };
+type ApiErrorResponse = { message?: string | string[] };
+
+function getErrorMessage(err: unknown) {
+  if (!isAxiosError<ApiErrorResponse>(err)) return undefined;
+  const message = err.response?.data?.message;
+  return Array.isArray(message) ? message.join(", ") : message;
+}
 
 export default function LoginPage() {
-  const router = useRouter();
   const { setAuth } = useAuthStore();
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState("");
@@ -31,17 +38,20 @@ export default function LoginPage() {
   const onSubmit = async (data: FormData) => {
     setError("");
     try {
-      const res = await api.post("/auth/login", data);
-      const { user } = getData<any>(res);
+      const res = await api.post("/auth/login", {
+        ...data,
+        username: data.username.trim(),
+      });
+      const { user } = getData<LoginResponse>(res);
       setAuth(user);
-      // Redirect based on role
-      if (user.role === "ADMIN") router.push("/admin/dashboard");
-      else if (user.role === "TEACHER") router.push("/teacher/classes");
-      else router.push("/student/my-schedule");
-    } catch (err: any) {
-      setError(
-        err.response?.data?.message || "Đăng nhập thất bại. Vui lòng thử lại."
-      );
+      // Use window.location.href instead of router.push to force a full page reload.
+      // This ensures Zustand's persist middleware flushes to localStorage before
+      // the new page's layout reads the store, preventing the auth redirect loop.
+      if (user.role === "ADMIN") window.location.assign("/admin/dashboard");
+      else if (user.role === "TEACHER") window.location.assign("/teacher/classes");
+      else window.location.assign("/student/my-schedule");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err) || "Đăng nhập thất bại. Vui lòng thử lại.");
     }
   };
 

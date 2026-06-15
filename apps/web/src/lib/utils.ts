@@ -59,6 +59,7 @@ export const DAY_LABELS: Record<string, string> = {
 };
 
 export const ATTENDANCE_LABELS: Record<string, string> = {
+  NOT_PRESENT: "Chưa có mặt",
   PRESENT: "Có mặt",
   ABSENT_EXCUSED: "Vắng có phép",
   ABSENT_UNEXCUSED: "Vắng không phép",
@@ -86,16 +87,48 @@ export const STATUS_LABELS: Record<string, string> = {
   ISSUED: "Đã xuất",
   DRAFT: "Nháp",
   OVERDUE: "Quá hạn",
+  REQUESTED: "Đã yêu cầu",
+  CHECKING: "Đang kiểm tra",
+  CONFIRMED: "Đã xác nhận",
+  NOT_RECEIVED: "Chưa nhận tiền",
+  NEEDS_MANUAL_REVIEW: "Cần xác minh",
+  RESOLVED_AUTO: "Tự động xác nhận",
+  RESOLVED_MANUAL: "Duyệt thủ công",
+  CLOSED: "Đã đóng",
+  REJECTED: "Từ chối",
   FINALIZED: "Đã chốt",
+  NEEDS_PAYMENT: "Cần thanh toán",
   SENT: "Đã gửi",
   SCHEDULED: "Hẹn giờ",
 };
 
 export function getStatusBadgeClass(status: string): string {
-  const success = ["ACTIVE", "APPROVED", "SUCCESS", "PAID", "FINALIZED", "SENT", "PRESENT"];
+  const success = [
+    "ACTIVE",
+    "APPROVED",
+    "SUCCESS",
+    "PAID",
+    "CONFIRMED",
+    "FINALIZED",
+    "SENT",
+    "PRESENT",
+    "RESOLVED_AUTO",
+    "RESOLVED_MANUAL",
+  ];
   const error = ["LOCKED", "REMOVED", "FAILED", "OVERDUE", "ABSENT_UNEXCUSED"];
-  const warn = ["PENDING", "PENDING_APPROVAL", "PARTIALLY_PAID", "SCHEDULED", "ABSENT_EXCUSED"];
-  const info = ["MAKEUP", "ISSUED", "DRAFT"];
+  const warn = [
+    "PENDING",
+    "PENDING_APPROVAL",
+    "PARTIALLY_PAID",
+    "SCHEDULED",
+    "ABSENT_EXCUSED",
+    "NOT_PRESENT",
+    "REQUESTED",
+    "CHECKING",
+    "NEEDS_MANUAL_REVIEW",
+    "NEEDS_PAYMENT",
+  ];
+  const info = ["MAKEUP", "ISSUED", "DRAFT", "NOT_RECEIVED", "REJECTED", "CLOSED"];
 
   if (success.includes(status)) return "badge-success";
   if (error.includes(status)) return "badge-error";

@@ -7,9 +7,10 @@ import { useAuthStore } from "@/stores/auth.store";
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { user, isAuthenticated } = useAuthStore();
+  const { user, hasHydrated, isAuthenticated } = useAuthStore();
 
   useEffect(() => {
+    if (!hasHydrated) return;
     if (!isAuthenticated()) {
       router.push("/login");
     } else if (user?.role !== "ADMIN") {
@@ -17,9 +18,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       if (user?.role === "TEACHER") router.push("/teacher/classes");
       else router.push("/student/my-schedule");
     }
-  }, [user, isAuthenticated, router]);
+  }, [user, hasHydrated, isAuthenticated, router]);
 
-  if (!user || user.role !== "ADMIN") return null;
+  if (!hasHydrated || !user || user.role !== "ADMIN") return null;
 
   return (
     <div style={{ display: "flex" }}>

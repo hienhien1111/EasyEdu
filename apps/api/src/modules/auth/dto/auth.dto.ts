@@ -1,9 +1,11 @@
 import {
   IsEmail,
+  IsDateString,
   IsEnum,
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
   MinLength,
 } from 'class-validator';
 import { UserRole } from '@prisma/client';
@@ -30,6 +32,16 @@ export class RegisterDto {
   @IsEnum(['TEACHER', 'STUDENT'])
   role: 'TEACHER' | 'STUDENT';
 
+  @ApiProperty({ example: 'nguyenvana' })
+  @IsNotEmpty()
+  @IsString()
+  @MinLength(3)
+  @Matches(/^[a-zA-Z0-9._-]+$/, {
+    message:
+      'Username chỉ được chứa chữ, số, dấu chấm, gạch dưới hoặc gạch ngang',
+  })
+  username: string;
+
   @ApiProperty({ example: 'Nguyễn Văn An' })
   @IsNotEmpty()
   @IsString()
@@ -49,6 +61,16 @@ export class RegisterDto {
   @IsString()
   @MinLength(8)
   password: string;
+
+  @ApiPropertyOptional({ enum: ['MALE', 'FEMALE', 'OTHER'] })
+  @IsOptional()
+  @IsEnum(['MALE', 'FEMALE', 'OTHER'])
+  gender?: 'MALE' | 'FEMALE' | 'OTHER';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  dateOfBirth?: string;
 
   // Teacher-only fields
   @ApiPropertyOptional({ type: [String], example: ['Toán', 'Lý'] })

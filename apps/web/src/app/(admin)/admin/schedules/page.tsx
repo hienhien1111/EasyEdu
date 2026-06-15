@@ -3,11 +3,19 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Plus, X, Loader2, Trash2, Clock, Edit2, Check, AlertCircle, LayoutGrid, Table2,
+  Plus, X, Loader2, Trash2, Clock, Edit2, Check, AlertCircle, LayoutGrid, Table2, CalendarDays, RefreshCw,
 } from "lucide-react";
 import Header from "@/components/layout/Header";
 import api, { getData } from "@/lib/api";
 import { DAY_LABELS } from "@/lib/utils";
+
+function formatWeekRange(weekStart: string): string {
+  const d = new Date(weekStart);
+  const end = new Date(d);
+  end.setDate(d.getDate() + 6);
+  const fmt = (dt: Date) => `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`;
+  return `${fmt(d)} – ${fmt(end)}/${end.getFullYear()}`;
+}
 
 /* ─── Constants ────────────────────────────────────────────────── */
 const DAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] as const;
@@ -504,16 +512,168 @@ function RoomTable({
   );
 }
 
+/* ─── Weekly Overview (Admin) ───────────────────────────────────── */
+function WeeklyOverviewTable({
+  allRooms, allTimeSlots, weekSchedules, weekStart,
+  onDeleteSchedule,
+}: {
+  allRooms: any[]; allTimeSlots: any[];
+  weekSchedules: any[]; weekStart: string;
+  onDeleteSchedule: (id: string) => void;
+}) {
+  const DAYS_ORDER = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
+
+  // effective map: "roomId-timeSlotId" → schedule
+  const effectiveMap = useMemo(() => {
+    const m: Record<string,any> = {};
+    for (const s of weekSchedules) {
+      const rId = s.effectiveRoomId ?? s.roomId;
+      const tId = s.effectiveTimeSlotId ?? s.timeSlotId;
+      m[`${rId}-${tId}`] = s;
+    }
+    return m;
+  }, [weekSchedules]);
+
+  const timeRanges = useMemo(() => {
+    const seen = new Set<string>();
+    const out: {startTime:string;endTime:string;day:string}[] = [];
+    for (const day of DAYS_ORDER) {
+      for (const s of allTimeSlots.filter(t => t.dayOfWeek === day).sort((a,b)=>a.startTime.localeCompare(b.startTime))) {
+        const k = `${s.startTime}-${s.endTime}-${day}`;
+        if (!seen.has(k)) { seen.add(k); out.push({startTime:s.startTime,endTime:s.endTime,day}); }
+      }
+    }
+    return out;
+  }, [allTimeSlots]);
+
+  const slotLookup = useMemo(() => {
+    const m: Record<string,any> = {};
+    for (const s of allTimeSlots) m[`${s.startTime}-${s.endTime}-${s.dayOfWeek}`] = s;
+    return m;
+  }, [allTimeSlots]);
+
+  // group by day
+  const dayGroups = useMemo(() => {
+    const g: Record<string, typeof timeRanges> = {};
+    for (const d of DAYS_ORDER) g[d] = timeRanges.filter(r => r.day === d);
+    return g;
+  }, [timeRanges]);
+
+  return (
+    <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 16, overflow: "hidden" }}>
+      {/* Week banner */}
+      <div style={{ padding: "10px 18px", background: "rgba(99,102,241,0.07)", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10 }}>
+        <CalendarDays size={14} color="var(--accent-primary)" />
+        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Lịch tuần: {formatWeekRange(weekStart)}</span>
+        <span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 4 }}>— Hiển thị lịch thực tế (bao gồm thay đổi của giáo viên)</span>
+      </div>
+      {/* Legend */}
+      <div style={{ padding: "8px 18px", borderBottom: "1px solid var(--border)", display: "flex", gap: 16, alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ width: 10, height: 10, borderRadius: 2, background: "#f59e0b" }} />
+          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>GV đã đổi tuần này</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ width: 10, height: 10, borderRadius: 2, background: "#6366f1" }} />
+          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Lịch gốc</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ width: 10, height: 10, borderRadius: 2, background: "#10b981" }} />
+          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Buổi học GV tự thêm</span>
+        </div>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
+          <thead>
+            <tr>
+              <th style={{ width: 120, padding: "10px 12px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", borderBottom: "1px solid var(--border)", background: "rgba(19,22,41,0.6)" }}>Thứ / Giờ</th>
+              {allRooms.map(room => (
+                <th key={room.id} style={{ padding: "10px 8px", textAlign: "center", fontSize: 11, fontWeight: 700, color: "var(--accent-secondary)", textTransform: "uppercase", letterSpacing: "0.5px", borderBottom: "1px solid var(--border)", borderLeft: "1px solid rgba(37,42,69,0.4)", background: "rgba(19,22,41,0.6)", whiteSpace: "nowrap" }}>
+                  {room.name}
+                  <span style={{ display: "block", fontSize: 9, color: "var(--text-muted)", fontWeight: 400, marginTop: 1 }}>{room.capacity} chỗ</span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {DAYS_ORDER.map(day => {
+              const rows = dayGroups[day];
+              if (!rows.length) return null;
+              return rows.map((row, ri) => (
+                <tr key={`${day}-${row.startTime}`} style={{ borderBottom: "1px solid rgba(37,42,69,0.35)" }}>
+                  {ri === 0 && (
+                    <td rowSpan={rows.length} style={{ padding: "10px 12px", verticalAlign: "top", background: "rgba(13,15,26,0.35)", borderRight: "1px solid rgba(37,42,69,0.5)", borderBottom: "2px solid rgba(99,102,241,0.25)" }}>
+                      <p style={{ fontSize: 13, fontWeight: 800, color: "var(--accent-secondary)", marginBottom: 4 }}>{DAY_LABELS[day]}</p>
+                      {rows.map((r, i) => (
+                        <p key={i} style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 500, display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
+                          <Clock size={9} />{r.startTime}–{r.endTime}
+                        </p>
+                      ))}
+                    </td>
+                  )}
+                  {allRooms.map(room => {
+                    const slot = slotLookup[`${row.startTime}-${row.endTime}-${day}`];
+                    const sch = slot ? effectiveMap[`${room.id}-${slot.id}`] : null;
+                    const isOverridden = sch?.isOverridden;
+                    const isNewSession = sch?.isNewSession;
+                    const color = isNewSession ? "#10b981" : isOverridden ? "#f59e0b" : "#6366f1";
+                    return (
+                      <td key={room.id} style={{ padding: 5, borderLeft: "1px solid rgba(37,42,69,0.4)", verticalAlign: "top", minWidth: 110, height: 70 }}>
+                        {sch ? (
+                          <div style={{ height: "100%", minHeight: 60, background: `${color}12`, border: `1px solid ${color}40`, borderRadius: 8, padding: "5px 7px", position: "relative" }}>
+                            <p style={{ fontSize: 11, fontWeight: 700, color, lineHeight: 1.3 }}>{sch.class?.name}</p>
+                            <p style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 1 }}>{sch.class?.subject}</p>
+                            {isOverridden && (
+                              <div title={`Gốc: ${sch.originalRoom?.name} · ${sch.originalTimeSlot?.label}`} style={{ marginTop: 2, fontSize: 9, color: "#f59e0b", display: "flex", alignItems: "center", gap: 3 }}>
+                                <RefreshCw size={8} />
+                                <span>GV đổi</span>
+                              </div>
+                            )}
+                            {isNewSession && (
+                              <div style={{ marginTop: 2, fontSize: 9, color: "#10b981", display: "flex", alignItems: "center", gap: 3 }}>
+                                <Plus size={8} />
+                                <span>GV thêm</span>
+                              </div>
+                            )}
+                            <button
+                              className="btn btn-danger btn-sm"
+                              style={{ position: "absolute", top: 3, right: 3, padding: "2px 3px", minHeight: "unset" }}
+                              onClick={() => { if (confirm("Xóa lịch này?")) onDeleteSchedule(sch.scheduleId ?? sch.id); }}
+                            ><Trash2 size={9} /></button>
+                          </div>
+                        ) : (
+                          <div style={{ height: "100%", minHeight: 60, background: "rgba(13,15,26,0.2)", borderRadius: 8 }} />
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ));
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Main Page ─────────────────────────────────────────────────── */
 export default function AdminSchedulePage() {
   const qc = useQueryClient();
   const [assignCell, setAssignCell] = useState<any>(null);
   const [filterRoom, setFilterRoom] = useState<string | null>(null); // null = overview
   const [showAddSlot, setShowAddSlot] = useState(false);
+  const [viewMode, setViewMode] = useState<"base" | "weekly">("base");
 
   const { data: grid, isLoading } = useQuery({
     queryKey: ["schedule-grid"],
     queryFn: () => api.get("/schedules/grid").then(r => getData<any>(r)),
+  });
+
+  const { data: weeklyGrid, isLoading: weeklyLoading } = useQuery({
+    queryKey: ["schedule-grid-weekly"],
+    queryFn: () => api.get("/schedules/grid", { params: { mode: "weekly" } }).then(r => getData<any>(r)),
+    enabled: viewMode === "weekly",
   });
 
   const { data: classesData } = useQuery({
@@ -523,13 +683,19 @@ export default function AdminSchedulePage() {
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.delete(`/schedules/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["schedule-grid"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["schedule-grid"] });
+      qc.invalidateQueries({ queryKey: ["schedule-grid-weekly"] });
+    },
   });
 
   const allRooms: any[] = grid?.rooms ?? [];
   const allTimeSlots: any[] = grid?.timeSlots ?? [];
   const schedules: any[] = grid?.schedules ?? [];
   const classes: any[] = classesData?.data ?? [];
+
+  const weekSchedules: any[] = weeklyGrid?.schedules ?? [];
+  const weekStart: string = weeklyGrid?.weekStart ?? "";
 
   const selectedRoom = filterRoom ? allRooms.find(r => r.id === filterRoom) : null;
 
@@ -546,23 +712,43 @@ export default function AdminSchedulePage() {
 
         {/* Controls */}
         <div style={{ display: "flex", gap: 12, marginBottom: 14, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
-          {/* Room tabs */}
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-            {/* Overview button */}
-            <button
-              className={`btn btn-sm ${!filterRoom ? "btn-primary" : "btn-ghost"}`}
-              onClick={() => setFilterRoom(null)}
-              style={{ display: "flex", alignItems: "center", gap: 5 }}
-            >
-              <Table2 size={13} /> Tổng hợp
-            </button>
-            {allRooms.map((r: any) => (
+            {/* View mode toggle */}
+            <div style={{ display: "flex", background: "var(--bg-secondary)", borderRadius: 8, padding: 3, border: "1px solid var(--border)", marginRight: 8 }}>
               <button
-                key={r.id}
-                className={`btn btn-sm ${filterRoom === r.id ? "btn-primary" : "btn-ghost"}`}
-                onClick={() => setFilterRoom(filterRoom === r.id ? null : r.id)}
-              >{r.name}</button>
-            ))}
+                className="btn btn-sm"
+                style={{ background: viewMode === "base" ? "var(--accent-primary)" : "transparent", color: viewMode === "base" ? "#fff" : "var(--text-muted)", border: "none", display: "flex", alignItems: "center", gap: 5, transition: "all 0.2s" }}
+                onClick={() => { setViewMode("base"); setFilterRoom(null); }}
+              >
+                <LayoutGrid size={12} /> Lịch gốc
+              </button>
+              <button
+                className="btn btn-sm"
+                style={{ background: viewMode === "weekly" ? "#f59e0b" : "transparent", color: viewMode === "weekly" ? "#fff" : "var(--text-muted)", border: "none", display: "flex", alignItems: "center", gap: 5, transition: "all 0.2s" }}
+                onClick={() => { setViewMode("weekly"); setFilterRoom(null); }}
+              >
+                <CalendarDays size={12} /> Lịch tuần này
+              </button>
+            </div>
+            {/* Room tabs — only in base mode */}
+            {viewMode === "base" && (
+              <>
+                <button
+                  className={`btn btn-sm ${!filterRoom ? "btn-primary" : "btn-ghost"}`}
+                  onClick={() => setFilterRoom(null)}
+                  style={{ display: "flex", alignItems: "center", gap: 5 }}
+                >
+                  <Table2 size={13} /> Tổng hợp
+                </button>
+                {allRooms.map((r: any) => (
+                  <button
+                    key={r.id}
+                    className={`btn btn-sm ${filterRoom === r.id ? "btn-primary" : "btn-ghost"}`}
+                    onClick={() => setFilterRoom(filterRoom === r.id ? null : r.id)}
+                  >{r.name}</button>
+                ))}
+              </>
+            )}
           </div>
           <button className="btn btn-primary btn-sm" onClick={() => setShowAddSlot(true)}>
             <Clock size={13} /> Thêm khung giờ
@@ -581,7 +767,21 @@ export default function AdminSchedulePage() {
         </div>
 
         {/* Content */}
-        {isLoading ? (
+        {viewMode === "weekly" ? (
+          weeklyLoading ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {[...Array(3)].map((_, i) => <div key={i} className="skeleton" style={{ height: 180, borderRadius: 16 }} />)}
+            </div>
+          ) : (
+            <WeeklyOverviewTable
+              allRooms={allRooms}
+              allTimeSlots={weeklyGrid?.timeSlots ?? allTimeSlots}
+              weekSchedules={weekSchedules}
+              weekStart={weekStart}
+              onDeleteSchedule={(id) => deleteMut.mutate(id)}
+            />
+          )
+        ) : isLoading ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {[...Array(3)].map((_, i) => <div key={i} className="skeleton" style={{ height: 180, borderRadius: 16 }} />)}
           </div>

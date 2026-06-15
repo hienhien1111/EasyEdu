@@ -14,7 +14,7 @@ async function main() {
 
   // ─── Rooms ───────────────────────────────────────────────────
   const rooms = await Promise.all(
-    Array.from({ length: 7 }, (_, i) =>
+    Array.from({ length: 7 }, (_, i) => 
       prisma.room.upsert({
         where: { name: `Phòng ${i + 1}` },
         update: {},
@@ -45,20 +45,50 @@ async function main() {
   console.log('✅ Time slots created');
 
   // ─── Admin ───────────────────────────────────────────────────
-  const admin = await prisma.user.upsert({
-    where: { email: 'admin@easyedu.vn' },
-    update: {},
-    create: {
-      username: 'admin',
-      email: 'admin@easyedu.vn',
-      phone: '0900000000',
-      passwordHash: await hash('Admin@123'),
-      role: UserRole.ADMIN,
-      status: UserStatus.ACTIVE,
-      profile: { create: { fullName: 'Quản trị viên EasyEdu', avatarUrl: null } },
+  const adminIdentity = {
+    username: 'admin',
+    email: 'admin@easyedu.vn',
+    phone: '0900000000',
+  };
+  const adminPasswordHash = await hash('Admin@123');
+  const existingAdmin = await prisma.user.findFirst({
+    where: {
+      OR: [
+        { email: adminIdentity.email },
+        { username: adminIdentity.username },
+        { phone: adminIdentity.phone },
+      ],
     },
   });
-  console.log('✅ Admin created: admin@easyedu.vn / Admin@123');
+  const admin = existingAdmin
+    ? await prisma.user.update({
+        where: { id: existingAdmin.id },
+        data: {
+          ...adminIdentity,
+          passwordHash: adminPasswordHash,
+          role: UserRole.ADMIN,
+          status: UserStatus.ACTIVE,
+          failedLoginCount: 0,
+          lockedUntil: null,
+          lockReason: null,
+          profile: {
+            upsert: {
+              update: { fullName: 'Quản trị viên EasyEdu', avatarUrl: null },
+              create: { fullName: 'Quản trị viên EasyEdu', avatarUrl: null },
+            },
+          },
+        },
+      })
+    : await prisma.user.create({
+        data: {
+          ...adminIdentity,
+          passwordHash: adminPasswordHash,
+          role: UserRole.ADMIN,
+          status: UserStatus.ACTIVE,
+          profile: { create: { fullName: 'Quản trị viên EasyEdu', avatarUrl: null } },
+        },
+      });
+  console.log('✅ Admin ready: admin@easyedu.vn / Admin@123');
 
   // ─── Teachers ────────────────────────────────────────────────
   const teacherData = [

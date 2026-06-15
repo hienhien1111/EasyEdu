@@ -20,6 +20,10 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "dev": "nest start --watch",
     "db:seed": "ts-node prisma/seed.ts",
+    "db:seed:billing-test": "ts-node prisma/reset-billing-test-data.ts",
+    "db:seed:cash-split-test": "ts-node prisma/seed-cash-split-test.ts",
+    "db:seed:qr-split-test": "ts-node prisma/seed-qr-split-test.ts",
+    "db:seed:reconciliation-test": "ts-node prisma/seed-reconciliation-test.ts",
     "db:generate": "prisma generate",
     "postinstall": "prisma generate"
   },
@@ -36,6 +40,7 @@
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/swagger": "^11.4.4",
     "@nestjs/throttler": "^6.5.0",
+    "@payos/node": "^2.0.5",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "bcrypt": "^6.0.0",

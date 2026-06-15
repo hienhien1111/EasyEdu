@@ -1,495 +1,731 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ClipboardCheck, Search, CheckCircle, Edit3, Loader2 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  CheckCircle,
+  ClipboardCheck,
+  Clock,
+  Loader2,
+  UserPlus,
+  Users,
+  XCircle,
+} from "lucide-react";
 import Header from "@/components/layout/Header";
 import api, { getData } from "@/lib/api";
-import {
-  formatDate,
-  getInitials,
-  ATTENDANCE_LABELS,
-  getStatusBadgeClass,
-  DAY_LABELS,
-} from "@/lib/utils";
+import { DAY_LABELS, formatDate, getInitials } from "@/lib/utils";
 
 const STATUSES = [
+  { value: "NOT_PRESENT", label: "Chưa có mặt", color: "#64748b" },
   { value: "PRESENT", label: "Có mặt", color: "#10b981" },
   { value: "ABSENT_EXCUSED", label: "Vắng phép", color: "#f59e0b" },
   { value: "ABSENT_UNEXCUSED", label: "Vắng KP", color: "#f43f5e" },
-  { value: "MAKEUP", label: "Học bù", color: "#6366f1" },
 ];
 
-function EditModal({
-  record,
-  onClose,
-}: {
-  record: any;
-  onClose: () => void;
-}) {
+function getSessionKey(session: any) {
+  return `${session.scheduleId ?? "extra"}:${session.weeklyOverrideId ?? "base"}:${session.sessionDate}`;
+}
+
+function getSessionCardKey(session: any) {
+  const studentsKey = (session.students ?? [])
+    .map(
+      (student: any) =>
+        `${student.studentId}:${student.status}:${student.makeupSourceId ?? ""}`,
+    )
+    .join("|");
+  return `${getSessionKey(session)}:${studentsKey}`;
+}
+
+function buildInitialRecords(students: any[]) {
+  return Object.fromEntries(
+    students.map((student) => [
+      student.studentId,
+      student.status ?? "NOT_PRESENT",
+    ]),
+  ) as Record<string, string>;
+}
+
+function AttendanceSessionCard({ session }: { session: any }) {
   const qc = useQueryClient();
-  const [status, setStatus] = useState(record.status);
-  const [note, setNote] = useState(record.note ?? "");
+  const students: any[] = session.students ?? [];
+  const [records, setRecords] = useState<Record<string, string>>(() =>
+    buildInitialRecords(students),
+  );
+  const [showMakeup, setShowMakeup] = useState(false);
 
-  // Check 24h window
-  const createdAt = new Date(record.createdAt ?? record.schedule?.date);
-  const hoursElapsed = (Date.now() - createdAt.getTime()) / 3600000;
-  const canEdit = hoursElapsed <= 24;
+  const { data: makeupCandidates, isLoading: isLoadingMakeup } = useQuery({
+    queryKey: ["eligible-makeup", session.classId],
+    queryFn: () =>
+      api
+        .get("/attendance/eligible-makeup", {
+          params: { classId: session.classId },
+        })
+        .then((r) => getData<any[]>(r)),
+    enabled: showMakeup && !!session.classId,
+  });
 
-  const mut = useMutation({
+  const saveMut = useMutation({
     mutationFn: () =>
-      api.patch(`/attendance/${record.id}`, { status, note }),
+      api.post("/attendance/save", {
+        scheduleId: session.scheduleId ?? undefined,
+        weeklyOverrideId: session.weeklyOverrideId ?? undefined,
+        sessionDate: session.sessionDate,
+        records: students.map((student) => ({
+          studentId: student.studentId,
+          status: records[student.studentId] ?? student.status ?? "NOT_PRESENT",
+          makeupSourceId:
+            student.makeupSourceId ??
+            student.attendance?.makeupSourceId ??
+            undefined,
+        })),
+      }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["attendance-sessions"] });
-      onClose();
+      qc.invalidateQueries({ queryKey: ["current-attendance"] });
+      qc.invalidateQueries({ queryKey: ["unresolved-not-present"] });
+      qc.invalidateQueries({ queryKey: ["teaching-history"] });
     },
   });
 
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div
-        className="modal"
-        style={{ maxWidth: 420 }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3
-          style={{
-            fontSize: 16,
-            fontWeight: 700,
-            color: "var(--text-primary)",
-            marginBottom: 8,
-          }}
-        >
-          ✏️ Chỉnh sửa điểm danh
-        </h3>
-        <p
-          style={{
-            fontSize: 12,
-            color: "var(--text-muted)",
-            marginBottom: 16,
-          }}
-        >
-          {record.student?.profile?.fullName} —{" "}
-          {formatDate(record.createdAt, "HH:mm dd/MM/yyyy")}
-        </p>
+  const addMakeupMut = useMutation({
+    mutationFn: (makeupSourceId: string) =>
+      api.post("/attendance/makeup-student", {
+        scheduleId: session.scheduleId ?? undefined,
+        weeklyOverrideId: session.weeklyOverrideId ?? undefined,
+        sessionDate: session.sessionDate,
+        makeupSourceId,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["current-attendance"] });
+      qc.invalidateQueries({ queryKey: ["unresolved-not-present"] });
+      qc.invalidateQueries({ queryKey: ["eligible-makeup", session.classId] });
+      qc.invalidateQueries({ queryKey: ["teaching-history"] });
+    },
+  });
 
-        {!canEdit && (
-          <div
+  const cancelMakeupMut = useMutation({
+    mutationFn: (makeupSourceId: string) =>
+      api.patch("/attendance/makeup-student/cancel", {
+        scheduleId: session.scheduleId ?? undefined,
+        weeklyOverrideId: session.weeklyOverrideId ?? undefined,
+        sessionDate: session.sessionDate,
+        makeupSourceId,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["current-attendance"] });
+      qc.invalidateQueries({ queryKey: ["unresolved-not-present"] });
+      qc.invalidateQueries({ queryKey: ["eligible-makeup", session.classId] });
+      qc.invalidateQueries({ queryKey: ["teaching-history"] });
+    },
+  });
+
+  const stats = {
+    present: Object.values(records).filter((status) => status === "PRESENT")
+      .length,
+    notPresent: Object.values(records).filter(
+      (status) => status === "NOT_PRESENT",
+    ).length,
+    total: students.length,
+  };
+
+  return (
+    <div className="card">
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 16,
+          marginBottom: 16,
+        }}
+      >
+        <div>
+          <h3
             style={{
-              background: "rgba(244,63,94,0.1)",
-              border: "1px solid rgba(244,63,94,0.3)",
-              borderRadius: 8,
-              padding: "10px 14px",
-              marginBottom: 14,
-              fontSize: 13,
-              color: "#f43f5e",
+              fontSize: 17,
+              fontWeight: 800,
+              color: "var(--text-primary)",
             }}
           >
-            ⏰ Đã quá 24 giờ — không thể chỉnh sửa điểm danh này
-          </div>
-        )}
-
-        <div style={{ marginBottom: 14 }}>
-          <label className="form-label">Trạng thái</label>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {STATUSES.map((s) => (
-              <button
-                key={s.value}
-                disabled={!canEdit}
-                onClick={() => setStatus(s.value)}
-                style={{
-                  padding: "7px 14px",
-                  borderRadius: 8,
-                  fontSize: 12,
-                  fontWeight: 600,
-                  cursor: canEdit ? "pointer" : "not-allowed",
-                  border: "1px solid",
-                  transition: "all 0.15s",
-                  background:
-                    status === s.value ? `${s.color}20` : "transparent",
-                  borderColor:
-                    status === s.value ? `${s.color}50` : "var(--border)",
-                  color: status === s.value ? s.color : "var(--text-muted)",
-                  opacity: canEdit ? 1 : 0.5,
-                }}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+            {session.class?.name}
+          </h3>
+          <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3 }}>
+            {session.class?.subject} · {DAY_LABELS[session.timeSlot?.dayOfWeek]}{" "}
+            · {session.timeSlot?.startTime}-{session.timeSlot?.endTime} ·{" "}
+            {session.room?.name}
+          </p>
         </div>
-
-        <div style={{ marginBottom: 16 }}>
-          <label className="form-label">Ghi chú</label>
-          <textarea
-            className="input"
-            rows={2}
-            disabled={!canEdit}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Lý do vắng, bù học..."
-            style={{ resize: "none" }}
-          />
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            color: "var(--text-muted)",
+            fontSize: 12,
+          }}
+        >
+          <Clock size={15} />
+          <span>
+            Kết thúc {formatDate(session.sessionEndAt, "HH:mm dd/MM/yyyy")}
+          </span>
         </div>
+      </div>
 
-        <div style={{ display: "flex", gap: 10 }}>
-          <button
-            onClick={onClose}
-            className="btn btn-ghost"
-            style={{ flex: 1 }}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, minmax(0,1fr))",
+          gap: 12,
+          marginBottom: 16,
+        }}
+      >
+        <div
+          style={{
+            background: "var(--bg-secondary)",
+            borderRadius: 8,
+            padding: "10px 12px",
+          }}
+        >
+          <p
+            style={{
+              fontSize: 11,
+              color: "var(--text-muted)",
+              fontWeight: 700,
+            }}
           >
-            Đóng
+            Tổng học sinh
+          </p>
+          <p
+            style={{
+              fontSize: 22,
+              fontWeight: 800,
+              color: "var(--text-primary)",
+            }}
+          >
+            {stats.total}
+          </p>
+        </div>
+        <div
+          style={{
+            background: "rgba(16,185,129,0.09)",
+            borderRadius: 8,
+            padding: "10px 12px",
+          }}
+        >
+          <p style={{ fontSize: 11, color: "#10b981", fontWeight: 700 }}>
+            Có mặt
+          </p>
+          <p style={{ fontSize: 22, fontWeight: 800, color: "#10b981" }}>
+            {stats.present}
+          </p>
+        </div>
+        <div
+          style={{
+            background: "rgba(100,116,139,0.12)",
+            borderRadius: 8,
+            padding: "10px 12px",
+          }}
+        >
+          <p style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700 }}>
+            Chưa có mặt
+          </p>
+          <p style={{ fontSize: 22, fontWeight: 800, color: "#94a3b8" }}>
+            {stats.notPresent}
+          </p>
+        </div>
+      </div>
+
+      <div
+        style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}
+      >
+        <span
+          style={{
+            fontSize: 11,
+            color: "var(--text-muted)",
+            display: "flex",
+            alignItems: "center",
+            marginRight: 2,
+          }}
+        >
+          Chấm nhanh:
+        </span>
+        {STATUSES.map((status) => (
+          <button
+            key={status.value}
+            className="btn btn-ghost btn-sm"
+            style={{
+              background: `${status.color}18`,
+              color: status.color,
+              borderColor: `${status.color}35`,
+              fontSize: 11,
+            }}
+            onClick={() => {
+              const next: Record<string, string> = {};
+              students.forEach((student) => {
+                next[student.studentId] =
+                  student.isMakeup && status.value !== "PRESENT"
+                    ? (records[student.studentId] ??
+                      student.status ??
+                      "NOT_PRESENT")
+                    : status.value;
+              });
+              setRecords(next);
+            }}
+          >
+            {status.label} tất cả
           </button>
-          {canEdit && (
-            <button
-              className="btn btn-primary"
-              style={{ flex: 1 }}
-              disabled={mut.isPending}
-              onClick={() => mut.mutate()}
-            >
-              {mut.isPending ? (
-                <>
-                  <Loader2 size={14} className="animate-spin-slow" /> Đang lưu...
-                </>
-              ) : (
-                "Lưu thay đổi"
-              )}
-            </button>
+        ))}
+        <button
+          className="btn btn-ghost btn-sm"
+          style={{ marginLeft: "auto", fontSize: 11 }}
+          onClick={() => setShowMakeup((value) => !value)}
+        >
+          <UserPlus size={13} /> Thêm học bù
+        </button>
+      </div>
+
+      {showMakeup && (
+        <div
+          style={{
+            border: "1px solid var(--border)",
+            background: "var(--bg-secondary)",
+            borderRadius: 8,
+            padding: 12,
+            marginBottom: 14,
+          }}
+        >
+          {isLoadingMakeup ? (
+            <div className="skeleton" style={{ height: 48, borderRadius: 8 }} />
+          ) : (makeupCandidates ?? []).length === 0 ? (
+            <p style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              Không có học sinh đủ điều kiện học bù
+            </p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {(makeupCandidates ?? []).map((candidate: any) => {
+                const fullName = candidate.student?.profile?.fullName ?? "—";
+                const sourceTimeSlot =
+                  candidate.weeklyOverride?.timeSlot ??
+                  candidate.schedule?.timeSlot;
+                return (
+                  <div
+                    key={candidate.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "8px 10px",
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      background: "var(--bg-card)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: 8,
+                        background: "rgba(99,102,241,0.13)",
+                        color: "#6366f1",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 11,
+                        fontWeight: 800,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {getInitials(fullName)}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 700,
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        {fullName}
+                      </p>
+                      <p style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                        {candidate.class?.name} ·{" "}
+                        {formatDate(candidate.sessionDate, "dd/MM/yyyy")} ·{" "}
+                        {sourceTimeSlot?.startTime}-{sourceTimeSlot?.endTime}
+                      </p>
+                    </div>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      disabled={addMakeupMut.isPending}
+                      onClick={() => addMakeupMut.mutate(candidate.id)}
+                    >
+                      {addMakeupMut.isPending ? (
+                        <Loader2 size={13} className="animate-spin-slow" />
+                      ) : (
+                        <UserPlus size={13} />
+                      )}
+                      Thêm
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {addMakeupMut.isError && (
+            <p style={{ fontSize: 12, color: "#f43f5e", marginTop: 10 }}>
+              {(addMakeupMut.error as any)?.response?.data?.message ??
+                "Không thể thêm học sinh học bù"}
+            </p>
           )}
         </div>
+      )}
+
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          maxHeight: 460,
+          overflowY: "auto",
+        }}
+      >
+        {students.map((student) => {
+          const current =
+            records[student.studentId] ?? student.status ?? "NOT_PRESENT";
+          const currentStatus =
+            STATUSES.find((status) => status.value === current) ?? STATUSES[0];
+          const fullName =
+            student.fullName ?? student.student?.profile?.fullName ?? "—";
+
+          return (
+            <div
+              key={student.studentId}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                padding: "10px 12px",
+                background: "var(--bg-secondary)",
+                border: `1px solid ${currentStatus.color}24`,
+                borderRadius: 8,
+              }}
+            >
+              <div
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 8,
+                  background: `${currentStatus.color}18`,
+                  color: currentStatus.color,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 11,
+                  fontWeight: 800,
+                  flexShrink: 0,
+                }}
+              >
+                {getInitials(fullName)}
+              </div>
+              <span
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "var(--text-primary)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {fullName}
+                {student.isMakeup && (
+                  <span
+                    style={{
+                      marginLeft: 8,
+                      fontSize: 10,
+                      fontWeight: 800,
+                      color: "#6366f1",
+                      background: "rgba(99,102,241,0.13)",
+                      borderRadius: 6,
+                      padding: "2px 6px",
+                    }}
+                  >
+                    Học bù
+                  </span>
+                )}
+              </span>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                {student.isMakeup ? (
+                  <>
+                    <button
+                      type="button"
+                      style={{
+                        padding: "5px 9px",
+                        borderRadius: 6,
+                        fontSize: 10,
+                        fontWeight: 800,
+                        cursor: "pointer",
+                        border: "1px solid",
+                        transition: "all 0.15s",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        background:
+                          current === "PRESENT"
+                            ? "rgba(16,185,129,0.14)"
+                            : "transparent",
+                        borderColor:
+                          current === "PRESENT"
+                            ? "rgba(16,185,129,0.45)"
+                            : "var(--border)",
+                        color:
+                          current === "PRESENT"
+                            ? "#10b981"
+                            : "var(--text-muted)",
+                      }}
+                      onClick={() =>
+                        setRecords((value) => ({
+                          ...value,
+                          [student.studentId]: "PRESENT",
+                        }))
+                      }
+                    >
+                      <CheckCircle size={12} /> Có mặt
+                    </button>
+                    <button
+                      type="button"
+                      style={{
+                        padding: "5px 9px",
+                        borderRadius: 6,
+                        fontSize: 10,
+                        fontWeight: 800,
+                        cursor: student.makeupSourceId
+                          ? "pointer"
+                          : "not-allowed",
+                        border: "1px solid rgba(244,63,94,0.34)",
+                        transition: "all 0.15s",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        background: "rgba(244,63,94,0.08)",
+                        color: "#f43f5e",
+                        opacity:
+                          cancelMakeupMut.isPending || !student.makeupSourceId
+                            ? 0.65
+                            : 1,
+                      }}
+                      disabled={
+                        cancelMakeupMut.isPending || !student.makeupSourceId
+                      }
+                      onClick={() =>
+                        student.makeupSourceId &&
+                        cancelMakeupMut.mutate(student.makeupSourceId)
+                      }
+                    >
+                      {cancelMakeupMut.isPending ? (
+                        <Loader2 size={12} className="animate-spin-slow" />
+                      ) : (
+                        <XCircle size={12} />
+                      )}
+                      Hủy
+                    </button>
+                  </>
+                ) : (
+                  STATUSES.map((status) => (
+                    <button
+                      key={status.value}
+                      type="button"
+                      style={{
+                        padding: "5px 9px",
+                        borderRadius: 6,
+                        fontSize: 10,
+                        fontWeight: 800,
+                        cursor: "pointer",
+                        border: "1px solid",
+                        transition: "all 0.15s",
+                        background:
+                          current === status.value
+                            ? `${status.color}22`
+                            : "transparent",
+                        borderColor:
+                          current === status.value
+                            ? `${status.color}55`
+                            : "var(--border)",
+                        color:
+                          current === status.value
+                            ? status.color
+                            : "var(--text-muted)",
+                      }}
+                      onClick={() =>
+                        setRecords((value) => ({
+                          ...value,
+                          [student.studentId]: status.value,
+                        }))
+                      }
+                    >
+                      {status.label}
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {students.length === 0 && (
+          <p
+            style={{
+              textAlign: "center",
+              color: "var(--text-muted)",
+              padding: 30,
+            }}
+          >
+            Lớp chưa có học sinh được duyệt
+          </p>
+        )}
+      </div>
+
+      {saveMut.isError && (
+        <p style={{ fontSize: 12, color: "#f43f5e", marginTop: 12 }}>
+          {(saveMut.error as any)?.response?.data?.message ??
+            "Không thể lưu điểm danh"}
+        </p>
+      )}
+      {cancelMakeupMut.isError && (
+        <p style={{ fontSize: 12, color: "#f43f5e", marginTop: 12 }}>
+          {(cancelMakeupMut.error as any)?.response?.data?.message ??
+            "Không thể hủy học sinh học bù"}
+        </p>
+      )}
+
+      <div
+        style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}
+      >
+        <button
+          className="btn btn-primary"
+          disabled={saveMut.isPending || students.length === 0}
+          onClick={() => saveMut.mutate()}
+        >
+          {saveMut.isPending ? (
+            <>
+              <Loader2 size={14} className="animate-spin-slow" /> Đang lưu...
+            </>
+          ) : (
+            <>
+              <CheckCircle size={14} /> Xác nhận điểm danh
+            </>
+          )}
+        </button>
       </div>
     </div>
   );
 }
 
 export default function TeacherAttendancePage() {
-  const [selectedClass, setSelectedClass] = useState<any>(null);
-  const [editRecord, setEditRecord] = useState<any>(null);
-  const [search, setSearch] = useState("");
-
-  const { data: myClasses } = useQuery({
-    queryKey: ["my-classes-list"],
+  const {
+    data: sessions,
+    isLoading,
+    isError,
+    error,
+  } = useQuery({
+    queryKey: ["current-attendance"],
     queryFn: () =>
-      api.get("/classes/my/classes").then((r) => getData<any[]>(r)),
+      api.get("/attendance/current").then((r) => getData<any[]>(r)),
+    refetchInterval: 30_000,
   });
 
-  const { data: sessions, isLoading } = useQuery({
-    queryKey: ["attendance-sessions", selectedClass?.id],
-    queryFn: () =>
-      api
-        .get(`/attendance/sessions`, {
-          params: { classId: selectedClass!.id },
-        })
-        .then((r) => getData<any[]>(r)),
-    enabled: !!selectedClass?.id,
-  });
-
-  const classes: any[] = myClasses ?? [];
   const sessionList: any[] = sessions ?? [];
-
-  // Stats per session
-  const getStats = (records: any[]) => ({
-    present: records.filter((r) => r.status === "PRESENT").length,
-    absent: records.filter((r) =>
-      ["ABSENT_EXCUSED", "ABSENT_UNEXCUSED"].includes(r.status)
-    ).length,
-    total: records.length,
-  });
 
   return (
     <div>
       <Header
         title="Điểm danh"
-        subtitle="UC-11 — Xem lịch sử, chỉnh sửa trong 24h"
+        subtitle="Chỉ chấm điểm danh cho buổi học đang diễn ra"
       />
       <div style={{ padding: "24px 28px" }} className="animate-fadein">
-        <div style={{ display: "grid", gridTemplateColumns: "240px 1fr", gap: 20 }}>
-          {/* Class picker */}
-          <div>
+        {isLoading ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {[...Array(2)].map((_, index) => (
+              <div
+                key={index}
+                className="skeleton"
+                style={{ height: 260, borderRadius: 12 }}
+              />
+            ))}
+          </div>
+        ) : isError ? (
+          <div
+            className="card"
+            style={{
+              textAlign: "center",
+              padding: "56px 24px",
+              color: "#f43f5e",
+              borderColor: "rgba(244,63,94,0.3)",
+              background: "rgba(244,63,94,0.06)",
+            }}
+          >
+            <p style={{ fontSize: 15, fontWeight: 800 }}>
+              Không tải được dữ liệu điểm danh
+            </p>
+            <p style={{ fontSize: 12, marginTop: 6 }}>
+              {(error as any)?.response?.data?.message ??
+                "Vui lòng tải lại trang hoặc kiểm tra API."}
+            </p>
+          </div>
+        ) : sessionList.length === 0 ? (
+          <div
+            className="card"
+            style={{
+              textAlign: "center",
+              padding: "70px 24px",
+              color: "var(--text-muted)",
+            }}
+          >
+            <ClipboardCheck
+              size={46}
+              style={{ margin: "0 auto 14px", opacity: 0.22, display: "block" }}
+            />
             <p
               style={{
-                fontSize: 11,
+                fontSize: 15,
                 fontWeight: 700,
-                color: "var(--text-muted)",
-                textTransform: "uppercase",
-                letterSpacing: "0.6px",
-                marginBottom: 10,
+                color: "var(--text-secondary)",
               }}
             >
-              Chọn lớp
+              Hiện không có buổi học nào đang diễn ra
             </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {classes.map((cls) => (
-                <button
-                  key={cls.id}
-                  onClick={() => setSelectedClass(cls)}
-                  style={{
-                    padding: "10px 14px",
-                    borderRadius: 10,
-                    border: "1px solid",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    transition: "all 0.15s",
-                    background:
-                      selectedClass?.id === cls.id
-                        ? "rgba(99,102,241,0.12)"
-                        : "var(--bg-card)",
-                    borderColor:
-                      selectedClass?.id === cls.id
-                        ? "rgba(99,102,241,0.4)"
-                        : "var(--border)",
-                  }}
-                >
-                  <p
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color:
-                        selectedClass?.id === cls.id
-                          ? "var(--accent-secondary)"
-                          : "var(--text-primary)",
-                    }}
-                  >
-                    {cls.name}
-                  </p>
-                  <p style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                    {cls.subject} · {cls._count?.enrollments ?? 0} hs
-                  </p>
-                </button>
-              ))}
-              {classes.length === 0 && (
-                <p
-                  style={{
-                    fontSize: 13,
-                    color: "var(--text-muted)",
-                    textAlign: "center",
-                    padding: "20px 0",
-                  }}
-                >
-                  Chưa có lớp
-                </p>
-              )}
-            </div>
+            <p style={{ fontSize: 12, marginTop: 6 }}>
+              Buổi học sẽ xuất hiện khi đã đến đúng thứ và giờ bắt đầu.
+            </p>
           </div>
-
-          {/* Session list */}
-          <div>
-            {!selectedClass ? (
-              <div
-                style={{
-                  textAlign: "center",
-                  padding: "80px 0",
-                  color: "var(--text-muted)",
-                }}
-              >
-                <ClipboardCheck
-                  size={48}
-                  style={{ margin: "0 auto 16px", opacity: 0.2, display: "block" }}
-                />
-                <p>Chọn một lớp để xem lịch sử điểm danh</p>
-              </div>
-            ) : isLoading ? (
-              [...Array(3)].map((_, i) => (
-                <div
-                  key={i}
-                  className="skeleton"
-                  style={{ height: 120, borderRadius: 12, marginBottom: 12 }}
-                />
-              ))
-            ) : sessionList.length === 0 ? (
-              <div
-                style={{
-                  textAlign: "center",
-                  padding: "60px 0",
-                  color: "var(--text-muted)",
-                }}
-              >
-                <p>Chưa có buổi điểm danh nào</p>
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {sessionList.map((session: any) => {
-                  const stats = getStats(session.records ?? []);
-                  const attendRate =
-                    stats.total > 0
-                      ? Math.round((stats.present / stats.total) * 100)
-                      : 0;
-
-                  return (
-                    <div key={session.scheduleId} className="card">
-                      {/* Session header */}
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          marginBottom: 14,
-                        }}
-                      >
-                        <div>
-                          <p
-                            style={{
-                              fontSize: 14,
-                              fontWeight: 700,
-                              color: "var(--text-primary)",
-                            }}
-                          >
-                            {DAY_LABELS[session.dayOfWeek]} —{" "}
-                            {session.startTime}–{session.endTime}
-                          </p>
-                          <p
-                            style={{
-                              fontSize: 12,
-                              color: "var(--text-muted)",
-                              marginTop: 2,
-                            }}
-                          >
-                            📅 {formatDate(session.date, "dd/MM/yyyy")} · 🚪{" "}
-                            {session.room}
-                          </p>
-                        </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                          <div style={{ textAlign: "right" }}>
-                            <p
-                              style={{
-                                fontSize: 20,
-                                fontWeight: 800,
-                                color:
-                                  attendRate >= 80
-                                    ? "#10b981"
-                                    : attendRate >= 60
-                                    ? "#f59e0b"
-                                    : "#f43f5e",
-                              }}
-                            >
-                              {attendRate}%
-                            </p>
-                            <p
-                              style={{ fontSize: 11, color: "var(--text-muted)" }}
-                            >
-                              {stats.present}/{stats.total} có mặt
-                            </p>
-                          </div>
-                          <div className="progress-bar" style={{ width: 60 }}>
-                            <div
-                              className="progress-fill"
-                              style={{
-                                width: `${attendRate}%`,
-                                background:
-                                  attendRate >= 80
-                                    ? "linear-gradient(90deg,#10b981,#34d399)"
-                                    : "linear-gradient(90deg,#f59e0b,#fbbf24)",
-                              }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Student rows */}
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns:
-                            "repeat(auto-fill, minmax(260px, 1fr))",
-                          gap: 8,
-                        }}
-                      >
-                        {(session.records ?? []).map((rec: any) => {
-                          const s = STATUSES.find(
-                            (s) => s.value === rec.status
-                          );
-                          const color = s?.color ?? "#9198c5";
-                          const hoursElapsed =
-                            (Date.now() -
-                              new Date(rec.createdAt).getTime()) /
-                            3600000;
-                          const canEdit = hoursElapsed <= 24;
-
-                          return (
-                            <div
-                              key={rec.id}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 10,
-                                padding: "8px 12px",
-                                background: `${color}08`,
-                                border: `1px solid ${color}25`,
-                                borderRadius: 8,
-                              }}
-                            >
-                              <div
-                                style={{
-                                  width: 28,
-                                  height: 28,
-                                  borderRadius: 6,
-                                  background: `${color}18`,
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  fontSize: 10,
-                                  fontWeight: 700,
-                                  color,
-                                  flexShrink: 0,
-                                }}
-                              >
-                                {getInitials(rec.student?.profile?.fullName)}
-                              </div>
-                              <span
-                                style={{
-                                  flex: 1,
-                                  fontSize: 12,
-                                  fontWeight: 500,
-                                  color: "var(--text-primary)",
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {rec.student?.profile?.fullName ?? "—"}
-                              </span>
-                              <span
-                                style={{
-                                  fontSize: 10,
-                                  fontWeight: 700,
-                                  color,
-                                  flexShrink: 0,
-                                }}
-                              >
-                                {s?.label ?? rec.status}
-                              </span>
-                              {canEdit && (
-                                <button
-                                  onClick={() => setEditRecord(rec)}
-                                  style={{
-                                    background: "none",
-                                    border: "none",
-                                    cursor: "pointer",
-                                    color: "var(--text-muted)",
-                                    padding: 2,
-                                    display: "flex",
-                                  }}
-                                  title="Chỉnh sửa (còn trong 24h)"
-                                >
-                                  <Edit3 size={12} />
-                                </button>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {sessionList.map((session) => (
+              <AttendanceSessionCard
+                key={getSessionCardKey(session)}
+                session={session}
+              />
+            ))}
           </div>
-        </div>
+        )}
+
+        {sessionList.length > 0 && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              color: "var(--text-muted)",
+              fontSize: 12,
+              marginTop: 16,
+            }}
+          >
+            <Users size={14} />
+            <span>
+              Học sinh mặc định là Chưa có mặt; giáo viên chấm Có mặt thủ công.
+            </span>
+          </div>
+        )}
       </div>
-
-      {editRecord && (
-        <EditModal record={editRecord} onClose={() => setEditRecord(null)} />
-      )}
     </div>
   );
 }

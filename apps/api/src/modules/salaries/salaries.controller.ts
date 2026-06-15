@@ -1,13 +1,25 @@
 import {
-  Controller, Get, Post, Patch, Body, Param, Query, BadRequestException, NotFoundException,
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Body,
+  Param,
+  Query,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { UserRole } from '@prisma/client';
-import { IsString, IsNotEmpty, IsDateString, IsNumber, IsOptional } from 'class-validator';
+import { SalaryStatus, UserRole } from '@prisma/client';
+import {
+  IsString,
+  IsNotEmpty,
+  IsDateString,
+  IsNumber,
+  IsOptional,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { PrismaService } from '../../database/prisma.service';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { SalariesService } from './salaries.service';
 
 class CalculateSalaryDto {
   @ApiProperty() @IsNotEmpty() @IsString() teacherId: string;
@@ -17,8 +29,31 @@ class CalculateSalaryDto {
 }
 
 class UpdateSalaryDto {
+  @ApiPropertyOptional() @IsOptional() @IsNumber() salaryPercentage?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() manualAdjustment?: number;
   @ApiPropertyOptional() @IsOptional() @IsString() note?: string;
+}
+
+class MonthlyFinalizeDayDto {
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsNumber()
+  day?: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsDateString()
+  date?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsDateString()
+  scheduledFinalizeAt?: string | null;
+}
+
+class ScheduleTeacherSalaryDto {
+  @ApiProperty() @IsNotEmpty() @IsString() teacherId: string;
+  @ApiProperty() @IsNotEmpty() @IsDateString() scheduledFinalizeAt: string;
 }
 
 @ApiTags('Salaries - Tính lương giáo viên')
@@ -26,152 +61,108 @@ class UpdateSalaryDto {
 @Roles(UserRole.ADMIN)
 @Controller('salaries')
 export class SalariesController {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly salariesService: SalariesService) {}
 
-  // Admin: Calculate salary for a teacher (UC-09)
+  @Get('admin/dashboard')
+  @ApiOperation({ summary: 'Admin: Tổng quan bảng lương nháp/tháng' })
+  async dashboard() {
+    return this.salariesService.dashboard();
+  }
+
+  @Get('admin/monthly-setting')
+  @ApiOperation({ summary: 'Admin: Cấu hình ngày chốt lương tháng' })
+  async getMonthlySetting() {
+    return this.salariesService.getMonthlySetting();
+  }
+
+  @Patch('admin/monthly-setting')
+  @ApiOperation({ summary: 'Admin: Cập nhật ngày chốt lương tháng' })
+  async updateMonthlySetting(@Body() dto: MonthlyFinalizeDayDto) {
+    return this.salariesService.updateMonthlyFinalizeDay(dto);
+  }
+
+  @Get('admin/monthly-prompt')
+  @ApiOperation({ summary: 'Admin: Kiểm tra popup chọn ngày chốt lương tháng mới' })
+  async monthlyPrompt() {
+    return this.salariesService.shouldPromptMonthlyFinalizeDay();
+  }
+
+  @Post('admin/monthly-prompt/seen')
+  @ApiOperation({ summary: 'Admin: Đánh dấu đã thấy popup chọn ngày chốt lương' })
+  async markMonthlyPromptSeen() {
+    return this.salariesService.markMonthlyPromptSeen();
+  }
+
+  @Post('admin/sync-drafts')
+  @ApiOperation({ summary: 'Admin: Đồng bộ/tạo bản nháp lương tháng cho giáo viên hiện tại' })
+  async syncDrafts() {
+    return this.salariesService.syncMonthlyDrafts();
+  }
+
+  @Post('admin/run-due')
+  @ApiOperation({ summary: 'Admin: Chốt các bảng lương đã đến ngày hẹn' })
+  async runDue() {
+    return this.salariesService.runDueSalaries();
+  }
+
+  @Post('admin/finalize-all-now')
+  @ApiOperation({ summary: 'Admin: Chốt tất cả bảng lương nháp hiện tại' })
+  async finalizeAllNow(@CurrentUser('id') adminId: string) {
+    return this.salariesService.finalizeAllDraftsNow(adminId);
+  }
+
+  @Post('admin/schedule-teacher')
+  @ApiOperation({ summary: 'Admin: Hẹn ngày chốt lương riêng cho giáo viên' })
+  async scheduleTeacher(@Body() dto: ScheduleTeacherSalaryDto) {
+    return this.salariesService.scheduleTeacherSalary(dto);
+  }
+
+  @Post('admin/finalize-teacher/:teacherId')
+  @ApiOperation({ summary: 'Admin: Chốt lương ngay cho một giáo viên' })
+  async finalizeTeacherNow(
+    @Param('teacherId') teacherId: string,
+    @CurrentUser('id') adminId: string,
+  ) {
+    return this.salariesService.finalizeTeacherNow(teacherId, adminId);
+  }
+
   @Post('calculate')
   @ApiOperation({ summary: 'Tính lương giáo viên (UC-09)' })
   async calculate(@Body() dto: CalculateSalaryDto) {
-    const periodStart = new Date(dto.periodStart);
-    const periodEnd = new Date(dto.periodEnd);
-
-    const teacher = await this.prisma.user.findUnique({
-      where: { id: dto.teacherId, role: 'TEACHER' },
-      include: { teacherProfile: true },
-    });
-    if (!teacher) throw new NotFoundException('Không tìm thấy giáo viên');
-
-    const salaryPct = teacher.teacherProfile?.salaryPercentage || 40;
-
-    // Get teacher's classes
-    const classes = await this.prisma.class.findMany({
-      where: { teacherId: dto.teacherId, isActive: true },
-    });
-
-    let totalRevenue = 0;
-    const salaryItems = [];
-
-    for (const cls of classes) {
-      // Count sessions taught (not CANCELLED)
-      const sessionsTaught = await this.prisma.schedule.count({
-        where: {
-          classId: cls.id,
-          teacherId: dto.teacherId,
-          type: { not: 'CANCELLED' },
-          effectiveDate: { gte: periodStart, lte: periodEnd },
-        },
-      });
-
-      // Count students in class
-      const studentCount = await this.prisma.enrollment.count({
-        where: { classId: cls.id, status: 'APPROVED' },
-      });
-
-      // Revenue = sessions * tuition * students (minus absent_excused without makeup)
-      const absentExcusedNoMakeup = await this.prisma.attendance.count({
-        where: {
-          schedule: {
-            classId: cls.id,
-            effectiveDate: { gte: periodStart, lte: periodEnd },
-          },
-          status: 'ABSENT_EXCUSED',
-          makeupSourceId: null,
-        },
-      });
-
-      const billableStudentSessions =
-        sessionsTaught * studentCount - absentExcusedNoMakeup;
-      const revenueAmount = Math.max(0, billableStudentSessions * cls.tuitionPerSession);
-      totalRevenue += revenueAmount;
-
-      salaryItems.push({
-        classId: cls.id,
-        sessionsTaught,
-        revenueAmount,
-        note: `${sessionsTaught} buổi x ${studentCount} hs - ${absentExcusedNoMakeup} vắng có phép`,
-      });
-    }
-
-    // Cash already collected by teacher
-    const cashCollected = await this.prisma.payment.aggregate({
-      where: {
-        cashCollectorId: dto.teacherId,
-        method: 'CASH',
-        status: 'SUCCESS',
-        createdAt: { gte: periodStart, lte: periodEnd },
-      },
-      _sum: { amount: true },
-    });
-    const cashDeduction = cashCollected._sum.amount || 0;
-
-    const grossSalary = (totalRevenue * salaryPct) / 100;
-    const netSalary = grossSalary - cashDeduction;
-
-    // Create or update draft salary
-    const existing = await this.prisma.salary.findUnique({
-      where: { teacherId_periodStart: { teacherId: dto.teacherId, periodStart } },
-    });
-
-    if (existing) {
-      return this.prisma.salary.update({
-        where: { id: existing.id },
-        data: {
-          totalRevenue, salaryPercentage: salaryPct,
-          grossSalary, cashDeduction, netSalary,
-          items: { deleteMany: {}, create: salaryItems },
-        },
-        include: { items: { include: { class: true } }, teacher: { include: { profile: true } } },
-      });
-    }
-
-    return this.prisma.salary.create({
-      data: {
-        teacherId: dto.teacherId, periodLabel: dto.periodLabel,
-        periodStart, periodEnd, totalRevenue,
-        salaryPercentage: salaryPct, grossSalary, cashDeduction, netSalary,
-        items: { create: salaryItems },
-      },
-      include: { items: { include: { class: true } }, teacher: { include: { profile: true } } },
-    });
+    return this.salariesService.calculate(dto);
   }
 
   @Get()
   @ApiOperation({ summary: 'Danh sách bảng lương' })
-  async findAll(@Query('teacherId') teacherId?: string, @Query('period') period?: string) {
-    return this.prisma.salary.findMany({
-      where: { teacherId, periodLabel: period },
-      include: {
-        teacher: { include: { profile: true } },
-        items: { include: { class: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+  async findAll(
+    @Query('teacherId') teacherId?: string,
+    @Query('period') period?: string,
+    @Query('status') status?: SalaryStatus | 'ALL',
+  ) {
+    return this.salariesService.findAll(teacherId, period, status);
   }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Cập nhật thủ công bảng lương nháp (UC-09)' })
   async update(@Param('id') id: string, @Body() dto: UpdateSalaryDto) {
-    const salary = await this.prisma.salary.findUnique({ where: { id } });
-    if (!salary) throw new NotFoundException('Không tìm thấy bảng lương');
-    if (salary.status === 'FINALIZED') throw new BadRequestException('Bảng lương đã chốt, không thể chỉnh sửa');
+    return this.salariesService.update(id, dto);
+  }
 
-    const newNet = salary.grossSalary - salary.cashDeduction + (dto.manualAdjustment ?? salary.manualAdjustment);
-    return this.prisma.salary.update({
-      where: { id },
-      data: { manualAdjustment: dto.manualAdjustment, note: dto.note, netSalary: newNet },
-    });
+  @Patch(':id/issue')
+  @ApiOperation({ summary: 'Chuyển bảng lương sang trạng thái cần thanh toán' })
+  async issue(@Param('id') id: string, @CurrentUser('id') adminId: string) {
+    return this.salariesService.markNeedsPayment(id, adminId);
+  }
+
+  @Patch(':id/pay')
+  @ApiOperation({ summary: 'Xác nhận đã thanh toán lương giáo viên' })
+  async pay(@Param('id') id: string, @CurrentUser('id') adminId: string) {
+    return this.salariesService.markPaid(id, adminId);
   }
 
   @Patch(':id/finalize')
-  @ApiOperation({ summary: 'Chốt bảng lương (UC-09)' })
+  @ApiOperation({ summary: 'Alias cũ: chuyển bảng lương sang cần thanh toán' })
   async finalize(@Param('id') id: string, @CurrentUser('id') adminId: string) {
-    const salary = await this.prisma.salary.findUnique({ where: { id } });
-    if (!salary) throw new NotFoundException('Không tìm thấy bảng lương');
-    if (salary.status === 'FINALIZED') throw new BadRequestException('Bảng lương đã được chốt');
-
-    return this.prisma.salary.update({
-      where: { id },
-      data: { status: 'FINALIZED', finalizedAt: new Date(), finalizedBy: adminId },
-    });
+    return this.salariesService.markNeedsPayment(id, adminId);
   }
 }

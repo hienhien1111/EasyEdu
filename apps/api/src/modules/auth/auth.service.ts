@@ -23,7 +23,7 @@ import {
   ChangePasswordDto,
 } from './dto/auth.dto';
 
-import { UserStatus } from '@prisma/client';
+import { Prisma, UserStatus } from '@prisma/client';
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MINUTES = 15;
@@ -44,7 +44,9 @@ export class AuthService {
     const resendKey = this.configService.get<string>('RESEND_API_KEY');
     this.resend = resendKey ? new Resend(resendKey) : null;
     if (!resendKey) {
-      this.logger.warn('RESEND_API_KEY not set — emails will only be logged to console');
+      this.logger.warn(
+        'RESEND_API_KEY not set — emails will only be logged to console',
+      );
     }
   }
 
@@ -70,8 +72,13 @@ export class AuthService {
   }
 
   // ─── Send OTP Email ───────────────────────────────────────────
-  private async sendOtpEmail(toEmail: string, otp: string, expiryMinutes: number) {
-    const from = this.configService.get<string>('EMAIL_FROM') || 'onboarding@resend.dev';
+  private async sendOtpEmail(
+    toEmail: string,
+    otp: string,
+    expiryMinutes: number,
+  ) {
+    const from =
+      this.configService.get<string>('EMAIL_FROM') || 'onboarding@resend.dev';
     const subject = 'EasyEdu — Mã xác thực OTP';
     const html = `
       <div style="font-family:Inter,sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#0d0f1a;color:#e2e4f3;border-radius:16px;">
@@ -90,8 +97,15 @@ export class AuthService {
 
     if (this.resend) {
       try {
-        const result = await this.resend.emails.send({ from, to: toEmail, subject, html });
-        this.logger.log(`OTP email sent to ${toEmail} — id: ${(result as any)?.data?.id ?? 'unknown'}`);
+        const result = await this.resend.emails.send({
+          from,
+          to: toEmail,
+          subject,
+          html,
+        });
+        this.logger.log(
+          `OTP email sent to ${toEmail} — id: ${(result as any)?.data?.id ?? 'unknown'}`,
+        );
       } catch (e: any) {
         this.logger.error(`Failed to send OTP email: ${e.message}`);
         // Don't throw — OTP is still saved in DB, user can retry
@@ -104,13 +118,14 @@ export class AuthService {
   // ─── Login (UC-01) ───────────────────────────────────────────
   async login(dto: LoginDto) {
     const { username, password, rememberMe } = dto;
+    const loginIdentifier = username.trim();
 
     const user = await this.prisma.user.findFirst({
       where: {
         OR: [
-          { email: username },
-          { phone: username },
-          { username: username },
+          { email: { equals: loginIdentifier, mode: 'insensitive' } },
+          { phone: loginIdentifier },
+          { username: { equals: loginIdentifier, mode: 'insensitive' } },
         ],
       },
       include: { profile: true },
@@ -121,7 +136,9 @@ export class AuthService {
     }
 
     if (user.status === UserStatus.LOCKED) {
-      throw new ForbiddenException('Tài khoản đã bị khóa. Vui lòng liên hệ quản trị viên.');
+      throw new ForbiddenException(
+        'Tài khoản đã bị khóa. Vui lòng liên hệ quản trị viên.',
+      );
     }
 
     if (user.lockedUntil && user.lockedUntil > new Date()) {
@@ -145,7 +162,10 @@ export class AuthService {
         updateData.failedLoginCount = 0;
       }
 
-      await this.prisma.user.update({ where: { id: user.id }, data: updateData });
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: updateData,
+      });
 
       await this.log(user.id, 'auth:login_failed', {
         attempt: newFailCount,
@@ -177,16 +197,28 @@ export class AuthService {
 
     // ── Issue tokens ────────────────────────────────────────────
     const jti = randomUUID();
-    const payload = { sub: user.id, username: user.username, role: user.role, jti };
+    const payload = {
+      sub: user.id,
+      username: user.username,
+      role: user.role,
+      jti,
+    };
     const accessTokenExpiresIn = rememberMe
       ? '30d'
       : this.configService.get('JWT_EXPIRES_IN', '15m');
 
-    const accessToken = this.jwtService.sign(payload, { expiresIn: accessTokenExpiresIn });
+    const accessToken = this.jwtService.sign(payload, {
+      expiresIn: accessTokenExpiresIn,
+    });
 
     // Always create a refresh token for seamless session renewal
     const refreshTokenRaw = this.jwtService.sign(
-      { sub: user.id, username: user.username, role: user.role },
+      {
+        sub: user.id,
+        username: user.username,
+        role: user.role,
+        jti: randomUUID(),
+      },
       {
         secret: this.configService.get('JWT_REFRESH_SECRET'),
         expiresIn: '30d',
@@ -227,7 +259,9 @@ export class AuthService {
         secret: this.configService.get('JWT_REFRESH_SECRET'),
       });
     } catch {
-      throw new UnauthorizedException('Refresh token không hợp lệ hoặc đã hết hạn');
+      throw new UnauthorizedException(
+        'Refresh token không hợp lệ hoặc đã hết hạn',
+      );
     }
 
     // Validate against DB record
@@ -241,7 +275,9 @@ export class AuthService {
     });
 
     if (!storedToken) {
-      throw new UnauthorizedException('Refresh token không hợp lệ hoặc đã bị thu hồi');
+      throw new UnauthorizedException(
+        'Refresh token không hợp lệ hoặc đã bị thu hồi',
+      );
     }
 
     // Verify user is still active
@@ -262,7 +298,12 @@ export class AuthService {
     );
 
     const newRefreshTokenRaw = this.jwtService.sign(
-      { sub: user.id, username: user.username, role: user.role },
+      {
+        sub: user.id,
+        username: user.username,
+        role: user.role,
+        jti: randomUUID(),
+      },
       {
         secret: this.configService.get('JWT_REFRESH_SECRET'),
         expiresIn: '30d',
@@ -289,64 +330,133 @@ export class AuthService {
   // ─── Register (UC-14) ────────────────────────────────────────
   async register(dto: RegisterDto) {
     const {
-      role, fullName, phone, email, password,
-      subjectsTaught, gradesHandled, experienceDesc, idCardNumber, bankAccount, bankName,
-      guardianName, guardianPhone, guardianRelation,
+      role,
+      username: rawUsername,
+      fullName,
+      phone,
+      email,
+      password,
+      gender,
+      dateOfBirth,
+      subjectsTaught,
+      gradesHandled,
+      experienceDesc,
+      idCardNumber,
+      bankAccount,
+      bankName,
+      guardianName,
+      guardianPhone,
+      guardianRelation,
     } = dto;
+    const username = rawUsername.trim().toLowerCase();
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPhone = phone.trim();
+    const normalizedFullName = fullName.trim();
+
+    if (username.length < 3) {
+      throw new BadRequestException('Username tối thiểu 3 ký tự');
+    }
+    if (!gender) {
+      throw new BadRequestException('Vui lòng chọn giới tính');
+    }
+    if (role === 'STUDENT' && !dateOfBirth) {
+      throw new BadRequestException('Vui lòng nhập ngày sinh của học sinh');
+    }
+
+    const parsedDateOfBirth =
+      role === 'STUDENT' && dateOfBirth ? new Date(dateOfBirth) : undefined;
+    if (
+      parsedDateOfBirth instanceof Date &&
+      Number.isNaN(parsedDateOfBirth.getTime())
+    ) {
+      throw new BadRequestException('Ngày sinh không hợp lệ');
+    }
 
     const existing = await this.prisma.user.findFirst({
-      where: { OR: [{ email }, { phone }] },
+      where: {
+        OR: [
+          { username: { equals: username, mode: 'insensitive' } },
+          { email: { equals: normalizedEmail, mode: 'insensitive' } },
+          { phone: normalizedPhone },
+        ],
+      },
     });
     if (existing) {
-      if (existing.email === email) {
+      if (existing.username.toLowerCase() === username) {
+        throw new ConflictException('Username đã được sử dụng');
+      }
+      if (existing.email.toLowerCase() === normalizedEmail) {
         throw new ConflictException('Email đã được sử dụng');
       }
       throw new ConflictException('Số điện thoại đã được sử dụng');
     }
 
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-    const username = email.split('@')[0] + '_' + Date.now();
 
-    const user = await this.prisma.$transaction(async (tx) => {
-      const newUser = await tx.user.create({
-        data: {
-          username,
-          email,
-          phone,
-          passwordHash,
-          role: role as any,
-          status: 'PENDING_APPROVAL',
-          profile: {
-            create: { fullName },
+    let user;
+    try {
+      user = await this.prisma.$transaction(async (tx) => {
+        const newUser = await tx.user.create({
+          data: {
+            username,
+            email: normalizedEmail,
+            phone: normalizedPhone,
+            passwordHash,
+            role: role as any,
+            status: 'PENDING_APPROVAL',
+            profile: {
+              create: {
+                fullName: normalizedFullName,
+                gender,
+                ...(parsedDateOfBirth && { dateOfBirth: parsedDateOfBirth }),
+              },
+            },
           },
-        },
+        });
+
+        if (role === 'TEACHER') {
+          await tx.teacherProfile.create({
+            data: {
+              userId: newUser.id,
+              subjectsTaught: subjectsTaught || [],
+              gradesHandled: gradesHandled || [],
+              experienceDesc,
+              idCardNumber,
+              bankAccountNumber: bankAccount,
+              bankName,
+            },
+          });
+        } else {
+          await tx.studentProfile.create({
+            data: {
+              userId: newUser.id,
+              guardianName,
+              guardianPhone,
+              guardianRole: (guardianRelation as any) || undefined,
+            },
+          });
+        }
+
+        return newUser;
       });
-
-      if (role === 'TEACHER') {
-        await tx.teacherProfile.create({
-          data: {
-            userId: newUser.id,
-            subjectsTaught: subjectsTaught || [],
-            gradesHandled: gradesHandled || [],
-            experienceDesc,
-            idCardNumber,
-            bankAccountNumber: bankAccount,
-            bankName,
-          },
-        });
-      } else {
-        await tx.studentProfile.create({
-          data: {
-            userId: newUser.id,
-            guardianName,
-            guardianPhone,
-            guardianRole: guardianRelation as any || undefined,
-          },
-        });
+    } catch (e: any) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        const target = Array.isArray(e.meta?.target) ? e.meta.target : [];
+        if (target.includes('username')) {
+          throw new ConflictException('Username đã được sử dụng');
+        }
+        if (target.includes('email')) {
+          throw new ConflictException('Email đã được sử dụng');
+        }
+        if (target.includes('phone')) {
+          throw new ConflictException('Số điện thoại đã được sử dụng');
+        }
       }
-
-      return newUser;
-    });
+      throw e;
+    }
 
     return {
       message: 'Đăng ký thành công. Tài khoản đang chờ Admin duyệt.',
@@ -370,7 +480,9 @@ export class AuthService {
     // ── OTP rate limit: max 3 per hour per user ────────────────
     const otpCount = await this.redisService.incrementOtpCount(user.id);
     if (otpCount > OTP_MAX_PER_HOUR) {
-      this.logger.warn(`OTP rate limit exceeded for user ${user.id} (${otpCount} attempts)`);
+      this.logger.warn(
+        `OTP rate limit exceeded for user ${user.id} (${otpCount} attempts)`,
+      );
       return { message: 'Nếu tài khoản tồn tại, mã OTP đã được gửi.' };
     }
 
@@ -382,7 +494,8 @@ export class AuthService {
 
     // Generate 6-digit OTP using CSPRNG (crypto.randomInt — not Math.random)
     const otp = randomInt(100000, 1000000).toString();
-    const expiryMinutes = this.configService.get<number>('OTP_EXPIRY_MINUTES') || 10;
+    const expiryMinutes =
+      this.configService.get<number>('OTP_EXPIRY_MINUTES') || 10;
 
     await this.prisma.otpToken.create({
       data: {

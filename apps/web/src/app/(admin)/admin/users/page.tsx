@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Plus, Search, Lock, Unlock, UserCheck, X, Loader2, Pencil, ShieldCheck,
+  Plus, Search, Lock, Unlock, X, Loader2, Pencil, ShieldCheck,
+  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
 } from "lucide-react";
 import Header from "@/components/layout/Header";
 import api, { getData } from "@/lib/api";
@@ -12,6 +13,132 @@ import { formatDate, getInitials, getStatusBadgeClass, ROLE_LABELS, STATUS_LABEL
 const ROLES = ["ADMIN", "TEACHER", "STUDENT"];
 const STATUSES = ["ACTIVE", "LOCKED", "PENDING_APPROVAL"];
 const ROLE_COLORS: Record<string, string> = { ADMIN: "#6366f1", TEACHER: "#10b981", STUDENT: "#f59e0b" };
+
+/* ─── Pagination Component ──────────────────────────────── */
+function Pagination({
+  page, totalPages, total, limit, onPageChange,
+}: {
+  page: number; totalPages: number; total: number; limit: number;
+  onPageChange: (p: number) => void;
+}) {
+  const [goTo, setGoTo] = useState("");
+
+  if (totalPages <= 1 && total === 0) return null;
+
+  // Tính range trang hiển thị với ellipsis
+  const getPages = (): (number | "...")[] => {
+    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    const delta = 2;
+    const range: number[] = [];
+    for (let i = Math.max(2, page - delta); i <= Math.min(totalPages - 1, page + delta); i++) {
+      range.push(i);
+    }
+    const pages: (number | "...")[] = [1];
+    if (range[0] > 2) pages.push("...");
+    pages.push(...range);
+    if (range[range.length - 1] < totalPages - 1) pages.push("...");
+    if (totalPages > 1) pages.push(totalPages);
+    return pages;
+  };
+
+  const from = total > 0 ? (page - 1) * limit + 1 : 0;
+  const to = Math.min(page * limit, total);
+
+  return (
+    <div style={{
+      display: "flex", justifyContent: "space-between", alignItems: "center",
+      marginTop: 20, flexWrap: "wrap", gap: 12,
+      borderTop: "1px solid var(--border)", paddingTop: 16,
+    }}>
+      {/* Info */}
+      <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
+        {total > 0 ? (
+          <>Hiển thị <strong style={{ color: "var(--text-secondary)" }}>{from}–{to}</strong> trong{" "}
+          <strong style={{ color: "var(--text-primary)" }}>{total}</strong> người dùng</>
+        ) : "Không có dữ liệu"}
+      </span>
+
+      {/* Page buttons */}
+      {totalPages > 1 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button
+            className="btn btn-ghost btn-sm" style={{ padding: "5px 8px" }}
+            disabled={page === 1} onClick={() => onPageChange(1)} title="Trang đầu"
+          >
+            <ChevronsLeft size={14} />
+          </button>
+          <button
+            className="btn btn-ghost btn-sm" style={{ padding: "5px 8px" }}
+            disabled={page === 1} onClick={() => onPageChange(page - 1)} title="Trang trước"
+          >
+            <ChevronLeft size={14} />
+          </button>
+
+          {getPages().map((p, i) =>
+            p === "..." ? (
+              <span key={`ellipsis-${i}`} style={{ padding: "0 4px", color: "var(--text-muted)", fontSize: 13 }}>…</span>
+            ) : (
+              <button
+                key={p}
+                onClick={() => onPageChange(p as number)}
+                style={{
+                  minWidth: 34, height: 32, padding: "0 8px", fontSize: 13,
+                  fontWeight: p === page ? 700 : 500, borderRadius: 8, cursor: "pointer",
+                  border: p === page ? "none" : "1px solid var(--border)",
+                  background: p === page
+                    ? "linear-gradient(135deg, #6366f1, #a855f7)"
+                    : "var(--bg-card)",
+                  color: p === page ? "#fff" : "var(--text-secondary)",
+                  boxShadow: p === page ? "0 2px 8px rgba(99,102,241,0.4)" : "none",
+                  transition: "all 0.15s",
+                }}
+              >
+                {p}
+              </button>
+            )
+          )}
+
+          <button
+            className="btn btn-ghost btn-sm" style={{ padding: "5px 8px" }}
+            disabled={page === totalPages} onClick={() => onPageChange(page + 1)} title="Trang sau"
+          >
+            <ChevronRight size={14} />
+          </button>
+          <button
+            className="btn btn-ghost btn-sm" style={{ padding: "5px 8px" }}
+            disabled={page === totalPages} onClick={() => onPageChange(totalPages)} title="Trang cuối"
+          >
+            <ChevronsRight size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Go-to page */}
+      {totalPages > 2 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>Đến trang</span>
+          <input
+            type="number" min={1} max={totalPages}
+            value={goTo}
+            onChange={(e) => setGoTo(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const n = parseInt(goTo, 10);
+                if (n >= 1 && n <= totalPages) { onPageChange(n); setGoTo(""); }
+              }
+            }}
+            style={{
+              width: 54, padding: "5px 8px", fontSize: 13, textAlign: "center",
+              background: "var(--bg-card)", border: "1px solid var(--border)",
+              borderRadius: 8, color: "var(--text-primary)", outline: "none",
+            }}
+            placeholder={String(page)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ─── Create User Modal ─────────────────────────────────── */
 function UserCreateForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
@@ -67,11 +194,7 @@ function UserCreateForm({ onClose, onSuccess }: { onClose: () => void; onSuccess
 /* ─── Edit User Modal ───────────────────────────────────── */
 function UserEditModal({ user, onClose }: { user: any; onClose: () => void }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState({
-    fullName: user.fullName ?? "",
-    email: user.email ?? "",
-    phone: user.phone ?? "",
-  });
+  const [form, setForm] = useState({ fullName: user.fullName ?? "", email: user.email ?? "", phone: user.phone ?? "" });
   const [newPassword, setNewPassword] = useState("");
   const [err, setErr] = useState("");
   const [success, setSuccess] = useState("");
@@ -79,23 +202,13 @@ function UserEditModal({ user, onClose }: { user: any; onClose: () => void }) {
 
   const updateMut = useMutation({
     mutationFn: () => api.patch(`/users/${user.id}`, form),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["users"] });
-      setSuccess("Đã cập nhật thông tin thành công");
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["users"] }); setSuccess("Đã cập nhật thành công"); },
     onError: (e: any) => setErr(e.response?.data?.message || "Cập nhật thất bại"),
   });
-
   const pwMut = useMutation({
     mutationFn: () => api.patch(`/users/${user.id}/reset-password`, { newPassword }),
     onSuccess: () => { setNewPassword(""); setSuccess("Đã đặt lại mật khẩu"); },
-    onError: (e: any) => setErr(e.response?.data?.message || "Đặt lại mật khẩu thất bại"),
-  });
-
-  const lockMut = useMutation({
-    mutationFn: (reason: string) => api.patch(`/users/${user.id}/lock`, { reason }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["users"] }); onClose(); },
-    onError: (e: any) => setErr(e.response?.data?.message || "Thất bại"),
+    onError: (e: any) => setErr(e.response?.data?.message || "Đặt lại thất bại"),
   });
   const unlockMut = useMutation({
     mutationFn: () => api.patch(`/users/${user.id}/unlock`),
@@ -111,7 +224,6 @@ function UserEditModal({ user, onClose }: { user: any; onClose: () => void }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" style={{ maxWidth: 500 }} onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{
@@ -127,8 +239,7 @@ function UserEditModal({ user, onClose }: { user: any; onClose: () => void }) {
               <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 1 }}>
                 <span className="badge" style={{ background: `${roleColor}18`, color: roleColor, borderColor: `${roleColor}30`, fontSize: 10 }}>
                   {ROLE_LABELS[user.role]}
-                </span>
-                {" "}
+                </span>{" "}
                 <span className={`badge ${getStatusBadgeClass(user.status)}`} style={{ fontSize: 10 }}>
                   {STATUS_LABELS[user.status] ?? user.status}
                 </span>
@@ -138,50 +249,35 @@ function UserEditModal({ user, onClose }: { user: any; onClose: () => void }) {
           <button onClick={onClose} className="btn btn-ghost btn-sm" style={{ padding: 6 }}><X size={16} /></button>
         </div>
 
-        {/* Tabs */}
         <div style={{ display: "flex", gap: 2, marginBottom: 20, background: "var(--bg-secondary)", borderRadius: 10, padding: 3 }}>
-          {[
-            { key: "info", label: "Thông tin" },
-            { key: "password", label: "Mật khẩu" },
-            { key: "status", label: "Trạng thái" },
-          ].map((t) => (
-            <button
-              key={t.key}
-              onClick={() => { setTab(t.key as any); setErr(""); setSuccess(""); }}
+          {(["info", "password", "status"] as const).map((t) => (
+            <button key={t}
+              onClick={() => { setTab(t); setErr(""); setSuccess(""); }}
               style={{
-                flex: 1, padding: "7px 0", fontSize: 12, fontWeight: 600,
-                borderRadius: 8, border: "none", cursor: "pointer",
-                background: tab === t.key ? "var(--bg-card)" : "transparent",
-                color: tab === t.key ? "var(--text-primary)" : "var(--text-muted)",
-                boxShadow: tab === t.key ? "0 1px 4px rgba(0,0,0,0.2)" : "none",
+                flex: 1, padding: "7px 0", fontSize: 12, fontWeight: 600, borderRadius: 8,
+                border: "none", cursor: "pointer",
+                background: tab === t ? "var(--bg-card)" : "transparent",
+                color: tab === t ? "var(--text-primary)" : "var(--text-muted)",
+                boxShadow: tab === t ? "0 1px 4px rgba(0,0,0,0.2)" : "none",
                 transition: "all 0.15s",
               }}
-            >{t.label}</button>
+            >
+              {{ info: "Thông tin", password: "Mật khẩu", status: "Trạng thái" }[t]}
+            </button>
           ))}
         </div>
 
-        {/* Alerts */}
         {err && <div style={{ background: "rgba(244,63,94,0.1)", border: "1px solid rgba(244,63,94,0.3)", borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#f43f5e" }}>{err}</div>}
         {success && <div style={{ background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)", borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#10b981" }}>{success}</div>}
 
-        {/* Tab: Info */}
         {tab === "info" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <div>
-              <label className="form-label">Họ và tên</label>
-              <input className="input" value={form.fullName}
-                onChange={(e) => setForm(f => ({ ...f, fullName: e.target.value }))} />
-            </div>
-            <div>
-              <label className="form-label">Email</label>
-              <input className="input" type="email" value={form.email}
-                onChange={(e) => setForm(f => ({ ...f, email: e.target.value }))} />
-            </div>
-            <div>
-              <label className="form-label">Số điện thoại</label>
-              <input className="input" value={form.phone}
-                onChange={(e) => setForm(f => ({ ...f, phone: e.target.value }))} />
-            </div>
+            <div><label className="form-label">Họ và tên</label>
+              <input className="input" value={form.fullName} onChange={(e) => setForm(f => ({ ...f, fullName: e.target.value }))} /></div>
+            <div><label className="form-label">Email</label>
+              <input className="input" type="email" value={form.email} onChange={(e) => setForm(f => ({ ...f, email: e.target.value }))} /></div>
+            <div><label className="form-label">Số điện thoại</label>
+              <input className="input" value={form.phone} onChange={(e) => setForm(f => ({ ...f, phone: e.target.value }))} /></div>
             <div style={{ fontSize: 12, color: "var(--text-muted)", background: "rgba(99,102,241,0.06)", borderRadius: 8, padding: "8px 12px" }}>
               Username: <strong style={{ color: "var(--text-secondary)" }}>@{user.username}</strong>
               {user.lastLoginAt && <span style={{ marginLeft: 12 }}>Đăng nhập lần cuối: {formatDate(user.lastLoginAt, "dd/MM/yyyy HH:mm")}</span>}
@@ -196,17 +292,14 @@ function UserEditModal({ user, onClose }: { user: any; onClose: () => void }) {
           </div>
         )}
 
-        {/* Tab: Password */}
         {tab === "password" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)", borderRadius: 8, padding: "10px 14px", fontSize: 12, color: "#f59e0b" }}>
-              Admin đặt lại mật khẩu sẽ không cần nhập mật khẩu cũ. Người dùng nên đổi lại sau khi nhận mật khẩu mới.
+              Admin đặt lại mật khẩu sẽ không cần nhập mật khẩu cũ.
             </div>
-            <div>
-              <label className="form-label">Mật khẩu mới</label>
+            <div><label className="form-label">Mật khẩu mới</label>
               <input className="input" type="password" placeholder="Tối thiểu 8 ký tự"
-                value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
-            </div>
+                value={newPassword} onChange={(e) => setNewPassword(e.target.value)} /></div>
             <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
               <button onClick={onClose} className="btn btn-ghost" style={{ flex: 1 }}>Hủy</button>
               <button className="btn btn-primary" style={{ flex: 1 }}
@@ -218,7 +311,6 @@ function UserEditModal({ user, onClose }: { user: any; onClose: () => void }) {
           </div>
         )}
 
-        {/* Tab: Status */}
         {tab === "status" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {user.status === "PENDING_APPROVAL" && (
@@ -229,9 +321,7 @@ function UserEditModal({ user, onClose }: { user: any; onClose: () => void }) {
                 </button>
               </div>
             )}
-            {user.status === "ACTIVE" && (
-              <LockSection userId={user.id} onDone={onClose} />
-            )}
+            {user.status === "ACTIVE" && <LockSection user={user} onDone={onClose} />}
             {user.status === "LOCKED" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {user.lockReason && (
@@ -251,11 +341,12 @@ function UserEditModal({ user, onClose }: { user: any; onClose: () => void }) {
   );
 }
 
-function LockSection({ userId, onDone }: { userId: string; onDone: () => void }) {
+function LockSection({ user, onDone }: { user: any; onDone: () => void }) {
   const qc = useQueryClient();
   const [reason, setReason] = useState("");
+  const [closeInvoices, setCloseInvoices] = useState(user.role === "STUDENT");
   const mut = useMutation({
-    mutationFn: () => api.patch(`/users/${userId}/lock`, { reason }),
+    mutationFn: () => api.patch(`/users/${user.id}/lock`, { reason, closeInvoices }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["users"] }); onDone(); },
   });
   return (
@@ -263,6 +354,17 @@ function LockSection({ userId, onDone }: { userId: string; onDone: () => void })
       <p style={{ fontSize: 13, color: "var(--text-secondary)" }}>Nhập lý do để khóa tài khoản này.</p>
       <textarea className="input" rows={3} placeholder="Lý do khóa..." value={reason}
         onChange={(e) => setReason(e.target.value)} style={{ resize: "none" }} />
+      {user.role === "STUDENT" && (
+        <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12, color: "var(--text-secondary)" }}>
+          <input
+            type="checkbox"
+            checked={closeInvoices}
+            onChange={(e) => setCloseInvoices(e.target.checked)}
+            style={{ marginTop: 2 }}
+          />
+          Chốt hóa đơn đang ghi nhận của học sinh này trước khi khóa và chuyển các hóa đơn đang mở sang khu lưu trữ.
+        </label>
+      )}
       <button className="btn btn-danger" disabled={!reason.trim() || mut.isPending} onClick={() => mut.mutate()}>
         <Lock size={14} /> {mut.isPending ? "Đang khóa..." : "Khóa tài khoản"}
       </button>
@@ -277,16 +379,19 @@ export default function AdminUsersPage() {
   const [role, setRole] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
+  const LIMIT = 10;
   const [showCreate, setShowCreate] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["users", search, role, status, page],
-    queryFn: () => api.get("/users", { params: { search, role, status, page, limit: 15 } }).then((r) => getData<any>(r)),
+    queryFn: () =>
+      api.get("/users", { params: { search, role, status, page, limit: LIMIT } })
+        .then((r) => getData<any>(r)),
   });
 
   const users: any[] = data?.data ?? [];
-  const meta = data?.meta ?? {};
+  const meta = data?.meta ?? { total: 0, totalPages: 1 };
 
   return (
     <div>
@@ -328,7 +433,7 @@ export default function AdminUsersPage() {
             </thead>
             <tbody>
               {isLoading ? (
-                [...Array(5)].map((_, i) => (
+                [...Array(LIMIT)].map((_, i) => (
                   <tr key={i}>
                     {[...Array(6)].map((_, j) => (
                       <td key={j}><div className="skeleton" style={{ height: 16, width: "80%" }} /></td>
@@ -339,12 +444,7 @@ export default function AdminUsersPage() {
                 <tr><td colSpan={6} style={{ textAlign: "center", padding: 40, color: "var(--text-muted)" }}>Không tìm thấy người dùng</td></tr>
               ) : (
                 users.map((u) => (
-                  <tr
-                    key={u.id}
-                    onClick={() => setEditingUser(u)}
-                    style={{ cursor: "pointer" }}
-                    title="Click để chỉnh sửa"
-                  >
+                  <tr key={u.id} onClick={() => setEditingUser(u)} style={{ cursor: "pointer" }} title="Click để chỉnh sửa">
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <div style={{
@@ -391,13 +491,13 @@ export default function AdminUsersPage() {
         </div>
 
         {/* Pagination */}
-        {meta.totalPages > 1 && (
-          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 20 }}>
-            <button className="btn btn-ghost btn-sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>← Trước</button>
-            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Trang {page} / {meta.totalPages}</span>
-            <button className="btn btn-ghost btn-sm" disabled={page === meta.totalPages} onClick={() => setPage((p) => p + 1)}>Sau →</button>
-          </div>
-        )}
+        <Pagination
+          page={page}
+          totalPages={meta.totalPages ?? 1}
+          total={meta.total ?? 0}
+          limit={LIMIT}
+          onPageChange={(p) => setPage(p)}
+        />
       </div>
 
       {showCreate && <UserCreateForm onClose={() => setShowCreate(false)} onSuccess={() => qc.invalidateQueries({ queryKey: ["users"] })} />}

@@ -6,7 +6,7 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
+  provider = "postgresql"
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -39,10 +39,11 @@ enum EnrollmentStatus {
 }
 
 enum AttendanceStatus {
+  NOT_PRESENT // Chưa có mặt / chưa được giáo viên xác nhận
   PRESENT
-  ABSENT_EXCUSED    // Vắng có phép
-  ABSENT_UNEXCUSED  // Vắng không phép
-  MAKEUP            // Học bù
+  ABSENT_EXCUSED // Vắng có phép
+  ABSENT_UNEXCUSED // Vắng không phép
+  MAKEUP // Học bù
 }
 
 enum DayOfWeek {
@@ -74,6 +75,100 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum PaymentCheckStatus {
+  NONE
+  REQUESTED
+  CHECKING
+  CONFIRMED
+  NOT_RECEIVED
+}
+
+enum PaymentEventActorType {
+  SYSTEM
+  STUDENT
+  ADMIN
+  TEACHER
+  PAYOS
+}
+
+enum PaymentEventType {
+  QR_LINK_CREATED
+  CASH_INITIATED
+  CASH_CONFIRMED
+  WEBHOOK_RECEIVED
+  WEBHOOK_AMOUNT_MISMATCH
+  WEBHOOK_FAILED
+  STUDENT_CHECK_REQUESTED
+  STUDENT_STATUS_CHECK
+  PAYOS_REQUERY
+  PAYOS_REQUERY_CONFIRMED
+  PAYOS_REQUERY_PENDING
+  PAYOS_REQUERY_CANCELLED
+  MANUAL_APPROVED
+  PAYMENT_CONFIRMED
+  PAYMENT_MARKED_NOT_SUCCESSFUL
+  INQUIRY_OPENED
+  INQUIRY_ESCALATED
+  INQUIRY_RESOLVED
+  SETTLEMENT_EXCEPTION_OPENED
+  LEDGER_POSTED
+}
+
+enum PaymentInquiryReason {
+  STUDENT_REPORTED_MONEY_DEDUCTED
+  WEBHOOK_MISSED
+  PAYOS_PENDING
+  PAYOS_CANCELLED
+  GATEWAY_ERROR
+  AMOUNT_MISMATCH
+  ADMIN_BANK_RECONCILIATION
+  OTHER
+}
+
+enum PaymentInquiryResolution {
+  PAYOS_CONFIRMED
+  MANUAL_BANK_CONFIRMED
+  NOT_RECEIVED
+  GATEWAY_CANCELLED
+  AMOUNT_MISMATCH
+  DUPLICATE
+  REFUND_REQUIRED
+  OTHER
+}
+
+enum PaymentInquirySeverity {
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+enum LedgerEntryType {
+  STUDENT_PAYMENT
+  CASH_COLLECTION
+  DEPOSIT_APPLIED
+  REFUND_TO_STUDENT
+  TEACHER_SALARY_PAYOUT
+  MANUAL_ADJUSTMENT
+}
+
+enum LedgerDirection {
+  IN
+  OUT
+  INTERNAL
+}
+
+enum LedgerEntryStatus {
+  PENDING
+  POSTED
+  VOIDED
+}
+
+enum PaymentLimitRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum InvoiceStatus {
   DRAFT
   ISSUED
@@ -82,14 +177,31 @@ enum InvoiceStatus {
   OVERDUE
 }
 
+enum InvoicePaymentMode {
+  UNDECIDED
+  QR
+  CASH
+}
+
+enum InvoiceIssueReason {
+  MONTHLY
+  MANUAL
+  STUDENT_LOCK
+}
+
 enum InquiryStatus {
   PENDING
+  NEEDS_MANUAL_REVIEW
   RESOLVED_AUTO
   RESOLVED_MANUAL
+  NOT_RECEIVED
+  CLOSED
 }
 
 enum SalaryStatus {
   DRAFT
+  NEEDS_PAYMENT
+  PAID
   FINALIZED
 }
 
@@ -119,119 +231,126 @@ enum InventoryStatus {
 // ─────────────────────────────────────────────────────────────
 
 model User {
-  id                String    @id @default(cuid())
-  username          String    @unique
-  email             String    @unique
-  phone             String    @unique
-  passwordHash      String
-  role              UserRole  @default(STUDENT)
-  status            UserStatus @default(PENDING_APPROVAL)
-  lockReason        String?
-  failedLoginCount  Int       @default(0)
-  lockedUntil       DateTime?
-  rememberToken     String?
-  lastLoginAt       DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id               String     @id @default(cuid())
+  username         String     @unique
+  email            String     @unique
+  phone            String     @unique
+  passwordHash     String
+  role             UserRole   @default(STUDENT)
+  status           UserStatus @default(PENDING_APPROVAL)
+  lockReason       String?
+  failedLoginCount Int        @default(0)
+  lockedUntil      DateTime?
+  rememberToken    String?
+  lastLoginAt      DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
   // Relations
-  profile           Profile?
-  teacherProfile    TeacherProfile?
-  studentProfile    StudentProfile?
-  otpTokens         OtpToken[]
-  refreshTokens     RefreshToken[]
-  classesAsTeacher  Class[]         @relation("TeacherClasses")
-  enrollments       Enrollment[]
-  attendances       Attendance[]    @relation("StudentAttendances")
-  scheduledBy       Schedule[]      @relation("ScheduleCreator")
-  invoices          Invoice[]       @relation("StudentInvoices")
-  salaries          Salary[]        @relation("TeacherSalaries")
-  notificationsCreated Notification[] @relation("NotificationCreator")
+  profile                Profile?
+  teacherProfile         TeacherProfile?
+  studentProfile         StudentProfile?
+  otpTokens              OtpToken[]
+  refreshTokens          RefreshToken[]
+  classesAsTeacher       Class[]                  @relation("TeacherClasses")
+  enrollments            Enrollment[]
+  attendances            Attendance[]             @relation("StudentAttendances")
+  teachingAttendances    Attendance[]             @relation("TeacherAttendances")
+  scheduledBy            Schedule[]               @relation("ScheduleCreator")
+  invoices               Invoice[]                @relation("StudentInvoices")
+  paymentLimitRequests   PaymentLimitRequest[]    @relation("StudentPaymentLimitRequests")
+  reviewedPaymentLimits  PaymentLimitRequest[]    @relation("ReviewedPaymentLimitRequests")
+  salaries               Salary[]                 @relation("TeacherSalaries")
+  notificationsCreated   Notification[]           @relation("NotificationCreator")
   notificationRecipients NotificationRecipient[]
-  auditLogs         AuditLog[]
-  cashPaymentsReceived Payment[]    @relation("CashCollector")
+  auditLogs              AuditLog[]
+  cashPaymentsReceived   Payment[]                @relation("CashCollector")
+  weeklyOverrides        ScheduleWeeklyOverride[] @relation("TeacherWeeklyOverrides")
 
   @@map("users")
 }
 
 model Profile {
-  id          String   @id @default(cuid())
-  userId      String   @unique
+  id          String    @id @default(cuid())
+  userId      String    @unique
   fullName    String
   avatarUrl   String?
   dateOfBirth DateTime?
+  gender      String?
   address     String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("profiles")
 }
 
 model TeacherProfile {
-  id                  String   @id @default(cuid())
-  userId              String   @unique
-  subjectsTaught      String[]
-  gradesHandled       String[]
-  experienceDesc      String?
-  idCardFrontUrl      String?
-  idCardBackUrl       String?
-  idCardNumber        String?
-  bankAccountNumber   String?
-  bankName            String?
-  taxCode             String?
-  salaryPercentage    Float    @default(40.0) // % doanh thu chia cho giáo viên
-  profileCompleteness Int      @default(0)   // 0-100%
-  contractSignedAt    DateTime?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                     String    @id @default(cuid())
+  userId                 String    @unique
+  subjectsTaught         String[]
+  gradesHandled          String[]
+  experienceDesc         String?
+  idCardFrontUrl         String?
+  idCardBackUrl          String?
+  idCardNumber           String?
+  bankAccountNumber      String?
+  bankName               String?
+  salaryQrCodeUrl        String?
+  salaryQrCodeStorageKey String?
+  taxCode                String?
+  salaryPercentage       Float     @default(40.0) // % doanh thu chia cho giáo viên
+  profileCompleteness    Int       @default(0) // 0-100%
+  contractSignedAt       DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
-  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("teacher_profiles")
 }
 
 model StudentProfile {
-  id                    String       @id @default(cuid())
-  userId                String       @unique
-  grade                 String?
-  school                String?
-  guardianRole          GuardianRole?
-  guardianName          String?
-  guardianPhone         String?
-  guardianDateOfBirth   DateTime?
-  createdAt             DateTime     @default(now())
-  updatedAt             DateTime     @updatedAt
+  id                  String        @id @default(cuid())
+  userId              String        @unique
+  grade               String?
+  school              String?
+  guardianRole        GuardianRole?
+  guardianName        String?
+  guardianPhone       String?
+  guardianDateOfBirth DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 
-  user                  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("student_profiles")
 }
 
 model OtpToken {
-  id          String   @id @default(cuid())
-  userId      String
-  token       String   @unique
-  expiresAt   DateTime
-  isUsed      Boolean  @default(false)
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  isUsed    Boolean  @default(false)
+  createdAt DateTime @default(now())
 
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("otp_tokens")
 }
 
 model RefreshToken {
-  id          String   @id @default(cuid())
-  userId      String
-  tokenHash   String   @unique
-  deviceInfo  String?
-  expiresAt   DateTime
-  isRevoked   Boolean  @default(false)
-  createdAt   DateTime @default(now())
+  id         String   @id @default(cuid())
+  userId     String
+  tokenHash  String   @unique
+  deviceInfo String?
+  expiresAt  DateTime
+  isRevoked  Boolean  @default(false)
+  createdAt  DateTime @default(now())
 
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("refresh_tokens")
 }
@@ -241,41 +360,43 @@ model RefreshToken {
 // ─────────────────────────────────────────────────────────────
 
 model Class {
-  id              String   @id @default(cuid())
-  name            String   @unique
-  subject         String
-  grade           String
-  teacherId       String
-  maxStudents     Int      @default(30)
-  tuitionPerSession Float  @default(0) // Học phí / buổi
-  isActive        Boolean  @default(true)
-  description     String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                String   @id @default(cuid())
+  name              String   @unique
+  subject           String
+  grade             String
+  teacherId         String
+  maxStudents       Int      @default(30)
+  tuitionPerSession Float    @default(0) // Học phí / buổi
+  isActive          Boolean  @default(true)
+  description       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  teacher         User     @relation("TeacherClasses", fields: [teacherId], references: [id])
+  teacher         User                     @relation("TeacherClasses", fields: [teacherId], references: [id])
   enrollments     Enrollment[]
   schedules       Schedule[]
+  attendances     Attendance[]
   invoiceItems    InvoiceItem[]
   salaryItems     SalaryItem[]
+  weeklyOverrides ScheduleWeeklyOverride[] @relation("ClassWeeklyOverrides")
 
   @@map("classes")
 }
 
 model Enrollment {
-  id          String           @id @default(cuid())
-  studentId   String
-  classId     String
-  status      EnrollmentStatus @default(PENDING)
-  approvedBy  String?
-  approvedAt  DateTime?
-  removedAt   DateTime?
+  id           String           @id @default(cuid())
+  studentId    String
+  classId      String
+  status       EnrollmentStatus @default(PENDING)
+  approvedBy   String?
+  approvedAt   DateTime?
+  removedAt    DateTime?
   removeReason String?
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
 
-  student     User             @relation(fields: [studentId], references: [id])
-  class       Class            @relation(fields: [classId], references: [id])
+  student User  @relation(fields: [studentId], references: [id])
+  class   Class @relation(fields: [classId], references: [id])
 
   @@unique([studentId, classId])
   @@map("enrollments")
@@ -286,27 +407,29 @@ model Enrollment {
 // ─────────────────────────────────────────────────────────────
 
 model Room {
-  id        String     @id @default(cuid())
-  name      String     @unique  // Phòng 1 → Phòng 7
-  capacity  Int        @default(40)
-  isActive  Boolean    @default(true)
-  createdAt DateTime   @default(now())
+  id        String   @id @default(cuid())
+  name      String   @unique // Phòng 1 → Phòng 7
+  capacity  Int      @default(40)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
 
-  schedules Schedule[]
+  schedules       Schedule[]
+  weeklyOverrides ScheduleWeeklyOverride[]
 
   @@map("rooms")
 }
 
 model TimeSlot {
-  id        String     @id @default(cuid())
+  id        String    @id @default(cuid())
   dayOfWeek DayOfWeek
-  startTime String     // "08:00"
-  endTime   String     // "10:00"
-  label     String     // "Thứ 2 - 08:00-10:00"
-  sortOrder Int        @default(0)
-  createdAt DateTime   @default(now())
+  startTime String // "08:00"
+  endTime   String // "10:00"
+  label     String // "Thứ 2 - 08:00-10:00"
+  sortOrder Int       @default(0)
+  createdAt DateTime  @default(now())
 
-  schedules Schedule[]
+  schedules       Schedule[]
+  weeklyOverrides ScheduleWeeklyOverride[]
 
   @@unique([dayOfWeek, startTime])
   @@map("time_slots")
@@ -319,22 +442,51 @@ model Schedule {
   timeSlotId    String
   teacherId     String
   type          ScheduleType @default(REGULAR)
-  effectiveDate DateTime     // Ngày bắt đầu áp dụng
-  endDate       DateTime?    // null = không giới hạn (lịch cố định)
-  cancelReason  String?      // Lý do báo nghỉ
-  makeupForId   String?      // Nếu là học bù, trỏ về schedule gốc bị nghỉ
-  weekOfMakeup  DateTime?    // Tuần mà lịch học bù có hiệu lực
+  effectiveDate DateTime // Ngày bắt đầu áp dụng
+  endDate       DateTime? // null = không giới hạn (lịch cố định)
+  cancelReason  String? // Lý do báo nghỉ
+  makeupForId   String? // Nếu là học bù, trỏ về schedule gốc bị nghỉ
+  weekOfMakeup  DateTime? // Tuần mà lịch học bù có hiệu lực
   createdBy     String
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
-  class         Class        @relation(fields: [classId], references: [id])
-  room          Room         @relation(fields: [roomId], references: [id])
-  timeSlot      TimeSlot     @relation(fields: [timeSlotId], references: [id])
-  creator       User         @relation("ScheduleCreator", fields: [createdBy], references: [id])
-  attendances   Attendance[]
+  class           Class                    @relation(fields: [classId], references: [id])
+  room            Room                     @relation(fields: [roomId], references: [id])
+  timeSlot        TimeSlot                 @relation(fields: [timeSlotId], references: [id])
+  creator         User                     @relation("ScheduleCreator", fields: [createdBy], references: [id])
+  attendances     Attendance[]
+  weeklyOverrides ScheduleWeeklyOverride[]
 
   @@map("schedules")
+}
+
+model ScheduleWeeklyOverride {
+  id         String   @id @default(cuid())
+  // Trỏ về Schedule REGULAR gốc (null nếu là buổi teacher tự thêm)
+  scheduleId String?
+  // Lớp teacher tự thêm (chỉ set khi scheduleId = null)
+  classId    String?
+  teacherId  String
+  weekStart  DateTime // Thứ 2 00:00:00 của tuần áp dụng
+  roomId     String // Phòng hiệu dụng tuần này
+  timeSlotId String // Khung giờ hiệu dụng tuần này
+  reason     String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  schedule    Schedule?    @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  class       Class?       @relation("ClassWeeklyOverrides", fields: [classId], references: [id])
+  teacher     User         @relation("TeacherWeeklyOverrides", fields: [teacherId], references: [id])
+  room        Room         @relation(fields: [roomId], references: [id])
+  timeSlot    TimeSlot     @relation(fields: [timeSlotId], references: [id])
+  attendances Attendance[]
+
+  // Mỗi lịch gốc chỉ 1 override/tuần
+  @@unique([scheduleId, weekStart])
+  // Mỗi ô (phòng+giờ) chỉ 1 session/tuần
+  @@unique([roomId, timeSlotId, weekStart])
+  @@map("schedule_weekly_overrides")
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -342,22 +494,36 @@ model Schedule {
 // ─────────────────────────────────────────────────────────────
 
 model Attendance {
-  id              String           @id @default(cuid())
-  scheduleId      String
-  studentId       String
-  status          AttendanceStatus @default(PRESENT)
-  makeupSourceId  String?          // Attendance "Vắng có phép" gốc được dùng để học bù
-  isLocked        Boolean          @default(false) // Sau 24h
-  autoClosedAt    DateTime?
-  note            String?
-  savedAt         DateTime?        // Lần đầu teacher nhấn Lưu
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  id               String           @id @default(cuid())
+  scheduleId       String?
+  weeklyOverrideId String?
+  classId          String
+  teacherId        String
+  studentId        String
+  sessionDate      DateTime
+  sessionStartAt   DateTime?
+  sessionEndAt     DateTime?
+  status           AttendanceStatus @default(NOT_PRESENT)
+  makeupSourceId   String? // Attendance "Vắng có phép" gốc được dùng để học bù
+  isLocked         Boolean          @default(false) // Sau thời hạn chỉnh sửa
+  autoClosedAt     DateTime?
+  note             String?
+  savedAt          DateTime? // Lần đầu teacher nhấn Lưu
+  editDeadlineAt   DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
-  schedule        Schedule         @relation(fields: [scheduleId], references: [id])
-  student         User             @relation("StudentAttendances", fields: [studentId], references: [id])
+  schedule       Schedule?               @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  weeklyOverride ScheduleWeeklyOverride? @relation(fields: [weeklyOverrideId], references: [id], onDelete: SetNull)
+  class          Class                   @relation(fields: [classId], references: [id])
+  teacher        User                    @relation("TeacherAttendances", fields: [teacherId], references: [id])
+  student        User                    @relation("StudentAttendances", fields: [studentId], references: [id])
 
-  @@unique([scheduleId, studentId])
+  @@unique([scheduleId, studentId, sessionDate])
+  @@unique([weeklyOverrideId, studentId, sessionDate])
+  @@unique([makeupSourceId])
+  @@index([teacherId, sessionDate])
+  @@index([classId, sessionDate])
   @@map("attendances")
 }
 
@@ -366,106 +532,236 @@ model Attendance {
 // ─────────────────────────────────────────────────────────────
 
 model Invoice {
-  id              String        @id @default(cuid())
-  studentId       String
-  periodLabel     String        // VD: "Tháng 5/2025"
-  periodStart     DateTime
-  periodEnd       DateTime
-  totalAmount     Float
-  paidAmount      Float         @default(0)
-  reserveBalance  Float         @default(0) // Số dư bảo lưu
-  status          InvoiceStatus @default(DRAFT)
-  maxPaymentTimes Int           // Số lần nộp tối đa = số lớp + 1
-  paymentCount    Int           @default(0)
-  isPaymentLocked Boolean       @default(false)
-  issuedAt        DateTime?
-  dueDate         DateTime?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id                 String              @id @default(cuid())
+  studentId          String
+  periodLabel        String // VD: "Tháng 5/2025"
+  periodStart        DateTime
+  periodEnd          DateTime
+  monthKey           String?
+  grossAmount        Float               @default(0)
+  totalAmount        Float
+  paidAmount         Float               @default(0)
+  depositApplied     Float               @default(0)
+  reserveBalance     Float               @default(0) // Số dư bảo lưu/cọc còn lại sau khi trừ
+  status             InvoiceStatus       @default(DRAFT)
+  paymentMode        InvoicePaymentMode  @default(UNDECIDED)
+  issueReason        InvoiceIssueReason?
+  maxPaymentTimes    Int // Số lần nộp tối đa = số lớp + 1
+  paymentCount       Int                 @default(0)
+  isPaymentLocked    Boolean             @default(false)
+  isCurrentDraft     Boolean             @default(false)
+  scheduledIssueAt   DateTime?
+  manualIssueAt      DateTime?
+  issuedAt           DateTime?
+  dueDate            DateTime?
+  archivedAt         DateTime?
+  archiveReason      String?
+  cashSplitCreatedAt DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
-  student         User          @relation("StudentInvoices", fields: [studentId], references: [id])
-  items           InvoiceItem[]
-  payments        Payment[]
-  receipts        Receipt[]
+  student              User                  @relation("StudentInvoices", fields: [studentId], references: [id])
+  items                InvoiceItem[]
+  payments             Payment[]
+  receipts             Receipt[]
+  paymentEvents        PaymentEvent[]
+  ledgerEntries        LedgerEntry[]
+  paymentLimitRequests PaymentLimitRequest[]
 
+  @@index([studentId, monthKey, isCurrentDraft])
+  @@index([status, scheduledIssueAt])
+  @@index([archivedAt])
   @@map("invoices")
 }
 
 model InvoiceItem {
-  id          String  @id @default(cuid())
-  invoiceId   String
-  classId     String
-  description String  // "Lớp Toán 6.2 - 8 buổi"
-  sessions    Int     // Số buổi tính tiền
-  unitPrice   Float   // Học phí / buổi
-  amount      Float   // sessions * unitPrice
-  isPaid      Boolean @default(false)
+  id             String  @id @default(cuid())
+  invoiceId      String
+  classId        String
+  description    String // "Lớp Toán 6.2 - 8 buổi"
+  sessions       Int // Số buổi tính tiền
+  unitPrice      Float // Học phí / buổi
+  grossAmount    Float   @default(0)
+  depositApplied Float   @default(0)
+  payableAmount  Float   @default(0)
+  amount         Float // sessions * unitPrice
+  isPaid         Boolean @default(false)
 
-  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  class       Class   @relation(fields: [classId], references: [id])
+  invoice       Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  class         Class         @relation(fields: [classId], references: [id])
+  payments      Payment[]
+  ledgerEntries LedgerEntry[]
 
   @@map("invoice_items")
 }
 
 model Payment {
-  id                String        @id @default(cuid())
-  invoiceId         String
-  method            PaymentMethod
-  amount            Float
-  status            PaymentStatus @default(PENDING)
-  // QR fields
-  qrCode            String?
-  bankTransactionId String?
-  bankResponseRaw   Json?
-  webhookReceivedAt DateTime?
+  id                      String             @id @default(cuid())
+  invoiceId               String
+  invoiceItemId           String?
+  method                  PaymentMethod
+  amount                  Float
+  status                  PaymentStatus      @default(PENDING)
+  // QR / PayOS fields
+  qrCode                  String?
+  payosOrderCode          BigInt?            @unique // Mã đơn hàng gửi lên PayOS (số nguyên)
+  payosPaymentLinkId      String? // Payment link ID từ PayOS
+  checkoutUrl             String? // URL thanh toán PayOS trả về
+  bankTransactionId       String?            @unique
+  bankResponseRaw         Json?
+  webhookReceivedAt       DateTime?
   // Cash fields
-  cashCollectorId   String?       // Teacher hoặc Admin đã xác nhận thu tiền
-  cashConfirmedAt   DateTime?
+  cashCollectorId         String? // Teacher hoặc Admin đã xác nhận thu tiền
+  cashConfirmedAt         DateTime?
   // Tracking
-  paymentNote       String?
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  paymentNote             String?
+  checkStatus             PaymentCheckStatus @default(NONE)
+  studentRequestedCheckAt DateTime?
+  adminCheckedAt          DateTime?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
 
-  invoice           Invoice       @relation(fields: [invoiceId], references: [id])
-  cashCollector     User?         @relation("CashCollector", fields: [cashCollectorId], references: [id])
-  receipts          Receipt[]
-  inquiry           PaymentInquiry?
+  invoice       Invoice         @relation(fields: [invoiceId], references: [id])
+  invoiceItem   InvoiceItem?    @relation(fields: [invoiceItemId], references: [id])
+  cashCollector User?           @relation("CashCollector", fields: [cashCollectorId], references: [id])
+  receipt       Receipt?
+  inquiry       PaymentInquiry?
+  events        PaymentEvent[]
+  ledgerEntries LedgerEntry[]
 
+  @@index([invoiceItemId])
   @@map("payments")
 }
 
 model Receipt {
-  id          String   @id @default(cuid())
-  invoiceId   String
-  paymentId   String
-  receiptNo   String   @unique  // EE-2025-000001
-  pdfUrl      String?
-  issuedAt    DateTime @default(now())
+  id        String   @id @default(cuid())
+  invoiceId String
+  paymentId String   @unique
+  receiptNo String   @unique // EE-2025-000001
+  pdfUrl    String?
+  issuedAt  DateTime @default(now())
 
-  invoice     Invoice  @relation(fields: [invoiceId], references: [id])
-  payment     Payment  @relation(fields: [paymentId], references: [id])
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  payment Payment @relation(fields: [paymentId], references: [id])
 
   @@map("receipts")
 }
 
 model PaymentInquiry {
-  id              String        @id @default(cuid())
-  paymentId       String        @unique
-  status          InquiryStatus @default(PENDING)
-  requeryCount    Int           @default(0)
+  id              String                    @id @default(cuid())
+  paymentId       String                    @unique
+  status          InquiryStatus             @default(PENDING)
+  reason          PaymentInquiryReason?
+  resolution      PaymentInquiryResolution?
+  severity        PaymentInquirySeverity    @default(NORMAL)
+  openedBy        String?
+  openedAt        DateTime                  @default(now())
+  handledBy       String?
+  handledAt       DateTime?
+  requeryCount    Int                       @default(0)
   lastRequeryAt   DateTime?
   lastResponseRaw Json?
+  studentNote     String?
+  adminNote       String?
   // Manual approve
   approvedBy      String?
   approvedAt      DateTime?
-  evidenceUrl     String?       // Ảnh bill chuyển khoản
+  evidenceUrl     String? // Ảnh bill chuyển khoản
   approveNote     String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
 
-  payment         Payment       @relation(fields: [paymentId], references: [id])
+  payment Payment @relation(fields: [paymentId], references: [id])
 
+  @@index([status, severity])
   @@map("payment_inquiries")
+}
+
+model PaymentEvent {
+  id        String                @id @default(cuid())
+  paymentId String?
+  invoiceId String?
+  actorType PaymentEventActorType @default(SYSTEM)
+  actorId   String?
+  type      PaymentEventType
+  message   String?
+  payload   Json?
+  createdAt DateTime              @default(now())
+
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  invoice Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([paymentId, createdAt])
+  @@index([invoiceId, createdAt])
+  @@index([type, createdAt])
+  @@map("payment_events")
+}
+
+model LedgerEntry {
+  id            String            @id @default(cuid())
+  entryNo       String            @unique
+  type          LedgerEntryType
+  direction     LedgerDirection
+  status        LedgerEntryStatus @default(POSTED)
+  amount        Float
+  currency      String            @default("VND")
+  description   String?
+  invoiceId     String?
+  invoiceItemId String?
+  paymentId     String?
+  studentId     String?
+  teacherId     String?
+  occurredAt    DateTime          @default(now())
+  postedAt      DateTime?
+  voidedAt      DateTime?
+  metadata      Json?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  invoice     Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  invoiceItem InvoiceItem? @relation(fields: [invoiceItemId], references: [id], onDelete: SetNull)
+  payment     Payment?     @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@index([studentId, occurredAt])
+  @@index([teacherId, occurredAt])
+  @@index([invoiceId, occurredAt])
+  @@index([paymentId])
+  @@index([type, direction, status])
+  @@map("ledger_entries")
+}
+
+model PaymentLimitRequest {
+  id                  String                    @id @default(cuid())
+  invoiceId           String
+  studentId           String
+  requestedExtraTimes Int                       @default(1)
+  reason              String?
+  status              PaymentLimitRequestStatus @default(PENDING)
+  reviewedBy          String?
+  reviewedAt          DateTime?
+  reviewNote          String?
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+
+  invoice  Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  student  User    @relation("StudentPaymentLimitRequests", fields: [studentId], references: [id])
+  reviewer User?   @relation("ReviewedPaymentLimitRequests", fields: [reviewedBy], references: [id])
+
+  @@index([status, createdAt])
+  @@index([studentId, invoiceId])
+  @@map("payment_limit_requests")
+}
+
+model InvoiceScheduleSetting {
+  id                      String   @id @default(cuid())
+  key                     String   @unique @default("monthly")
+  monthlyIssueDay         Int?
+  monthlyIssueTimeMinutes Int?
+  lastPromptedMonth       String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  @@map("invoice_schedule_settings")
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -473,41 +769,74 @@ model PaymentInquiry {
 // ─────────────────────────────────────────────────────────────
 
 model Salary {
-  id                  String       @id @default(cuid())
-  teacherId           String
-  periodLabel         String       // "Tháng 5/2025"
-  periodStart         DateTime
-  periodEnd           DateTime
-  totalRevenue        Float        // Tổng doanh thu lớp phụ trách
-  salaryPercentage    Float        // % tại thời điểm tính
-  grossSalary         Float        // totalRevenue * salaryPercentage / 100
-  cashDeduction       Float        @default(0) // Tiền mặt giáo viên đã thu
-  netSalary           Float        // grossSalary - cashDeduction
-  manualAdjustment    Float        @default(0) // Phụ cấp/phạt thủ công
-  note                String?
-  status              SalaryStatus @default(DRAFT)
-  finalizedAt         DateTime?
-  finalizedBy         String?
-  createdAt           DateTime     @default(now())
-  updatedAt           DateTime     @updatedAt
+  id                           String       @id @default(cuid())
+  teacherId                    String
+  periodLabel                  String // "Tháng 5/2025"
+  periodStart                  DateTime
+  periodEnd                    DateTime
+  monthKey                     String?
+  totalPrimarySessions         Int          @default(0)
+  totalExtraSessions           Int          @default(0)
+  totalPresentCount            Int          @default(0)
+  totalAbsentUnexcusedCount    Int          @default(0)
+  totalBillableStudentSessions Int          @default(0)
+  totalRevenue                 Float // Tổng doanh thu lớp phụ trách
+  salaryPercentage             Float // % tại thời điểm tính
+  grossSalary                  Float // totalRevenue * salaryPercentage / 100
+  cashDeduction                Float        @default(0) // Tiền mặt giáo viên đã thu
+  netSalary                    Float // grossSalary - cashDeduction
+  manualAdjustment             Float        @default(0) // Phụ cấp/phạt thủ công
+  note                         String?
+  status                       SalaryStatus @default(DRAFT)
+  isCurrentDraft               Boolean      @default(false)
+  scheduledFinalizeAt          DateTime?
+  manualFinalizeAt             DateTime?
+  finalizedAt                  DateTime?
+  finalizedBy                  String?
+  paidAt                       DateTime?
+  paidBy                       String?
+  createdAt                    DateTime     @default(now())
+  updatedAt                    DateTime     @updatedAt
 
-  teacher             User         @relation("TeacherSalaries", fields: [teacherId], references: [id])
-  items               SalaryItem[]
+  teacher User         @relation("TeacherSalaries", fields: [teacherId], references: [id])
+  items   SalaryItem[]
 
   @@unique([teacherId, periodStart])
+  @@index([teacherId, monthKey, isCurrentDraft])
+  @@index([status, scheduledFinalizeAt])
   @@map("salaries")
 }
 
-model SalaryItem {
-  id            String  @id @default(cuid())
-  salaryId      String
-  classId       String
-  sessionsTaught Int    // Số buổi dạy thực tế
-  revenueAmount Float   // Doanh thu lớp này kỳ này
-  note          String?
+model SalaryScheduleSetting {
+  id                         String   @id @default(cuid())
+  key                        String   @unique @default("monthly")
+  monthlyFinalizeDay         Int?
+  monthlyFinalizeTimeMinutes Int?
+  lastPromptedMonth          String?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
 
-  salary        Salary  @relation(fields: [salaryId], references: [id], onDelete: Cascade)
-  class         Class   @relation(fields: [classId], references: [id])
+  @@map("salary_schedule_settings")
+}
+
+model SalaryItem {
+  id                      String  @id @default(cuid())
+  salaryId                String
+  classId                 String
+  sessionsTaught          Int // Số buổi dạy thực tế
+  primarySessionsTaught   Int     @default(0)
+  extraSessionsTaught     Int     @default(0)
+  presentCount            Int     @default(0)
+  absentUnexcusedCount    Int     @default(0)
+  billableStudentSessions Int     @default(0)
+  tuitionPerSession       Float   @default(0)
+  revenueAmount           Float // Doanh thu lớp này kỳ này
+  salaryAmount            Float   @default(0)
+  cashCollected           Float   @default(0)
+  note                    String?
+
+  salary Salary @relation(fields: [salaryId], references: [id], onDelete: Cascade)
+  class  Class  @relation(fields: [classId], references: [id])
 
   @@map("salary_items")
 }
@@ -517,20 +846,20 @@ model SalaryItem {
 // ─────────────────────────────────────────────────────────────
 
 model Notification {
-  id              String                 @id @default(cuid())
-  creatorId       String
-  title           String
-  content         String                 // Rich text HTML
-  attachmentUrls  String[]
-  targetType      NotificationTargetType @default(ALL)
-  status          NotificationStatus     @default(DRAFT)
-  scheduledAt     DateTime?              // null = gửi ngay
-  sentAt          DateTime?
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @updatedAt
+  id             String                 @id @default(cuid())
+  creatorId      String
+  title          String
+  content        String // Rich text HTML
+  attachmentUrls String[]
+  targetType     NotificationTargetType @default(ALL)
+  status         NotificationStatus     @default(DRAFT)
+  scheduledAt    DateTime? // null = gửi ngay
+  sentAt         DateTime?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
 
-  creator         User                   @relation("NotificationCreator", fields: [creatorId], references: [id])
-  recipients      NotificationRecipient[]
+  creator    User                    @relation("NotificationCreator", fields: [creatorId], references: [id])
+  recipients NotificationRecipient[]
 
   @@map("notifications")
 }
@@ -543,8 +872,8 @@ model NotificationRecipient {
   readAt         DateTime?
   createdAt      DateTime  @default(now())
 
-  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
-  user           User         @relation(fields: [userId], references: [id])
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
 
   @@unique([notificationId, userId])
   @@map("notification_recipients")
@@ -555,16 +884,16 @@ model NotificationRecipient {
 // ─────────────────────────────────────────────────────────────
 
 model Inventory {
-  id          String          @id @default(cuid())
-  name        String
-  category    String
-  quantity    Int             @default(0)
-  unitPrice   Float           @default(0)
-  status      InventoryStatus @default(AVAILABLE)
-  description String?
-  hasActiveRecord Boolean     @default(false) // Đang trong biên bản mượn
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id              String          @id @default(cuid())
+  name            String
+  category        String
+  quantity        Int             @default(0)
+  unitPrice       Float           @default(0)
+  status          InventoryStatus @default(AVAILABLE)
+  description     String?
+  hasActiveRecord Boolean         @default(false) // Đang trong biên bản mượn
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   @@map("inventory")
 }
@@ -576,14 +905,14 @@ model Inventory {
 model AuditLog {
   id         String   @id @default(cuid())
   userId     String
-  action     String   // "user:lock", "payment:manual_approve", etc.
+  action     String // "user:lock", "payment:manual_approve", etc.
   entityType String?
   entityId   String?
   metadata   Json?
   ipAddress  String?
   createdAt  DateTime @default(now())
 
-  user       User     @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id])
 
   @@map("audit_logs")
 }

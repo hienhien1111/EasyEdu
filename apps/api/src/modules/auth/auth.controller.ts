@@ -37,7 +37,9 @@ export class AuthController {
     return {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict' as const,
+      // 'lax' cho phép cookie được gửi khi frontend (localhost:3000) gọi API (localhost:3001)
+      // 'strict' sẽ chặn hoàn toàn cross-site cookie trong dev
+      sameSite: 'lax' as const,
       maxAge: maxAgeMs,
       path: '/',
     };

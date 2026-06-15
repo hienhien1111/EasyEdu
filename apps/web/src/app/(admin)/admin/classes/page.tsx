@@ -107,14 +107,19 @@ function ClassForm({ cls, teachers, onClose }: { cls?: any; teachers: any[]; onC
 function AddStudentModal({ cls, onClose }: { cls: any; onClose: () => void }) {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
   const [err, setErr] = useState("");
+  const PAGE_SIZE = 8;
 
-  // All students — no status filter so all STUDENT accounts appear
-  const { data: studentsData } = useQuery({
-    queryKey: ["students-picker", search],
+  // Paginated students — reset page when search changes
+  const handleSearch = (val: string) => { setSearch(val); setPage(1); };
+
+  const { data: studentsData, isFetching } = useQuery({
+    queryKey: ["students-picker", search, page],
     queryFn: () =>
-      api.get("/users", { params: { role: "STUDENT", search, limit: 50 } })
+      api.get("/users", { params: { role: "STUDENT", search, page, limit: PAGE_SIZE } })
         .then(r => getData<any>(r)),
+    placeholderData: (prev) => prev, // giữ data cũ khi chuyển trang
   });
 
   // Current enrollments for this class
@@ -128,7 +133,9 @@ function AddStudentModal({ cls, onClose }: { cls: any; onClose: () => void }) {
     return new Set(list.filter(e => e.status === "APPROVED").map((e: any) => e.studentId));
   }, [enrollments]);
 
-  const allStudents: any[] = Array.isArray(studentsData?.data) ? studentsData.data : (Array.isArray(studentsData) ? studentsData : []);
+  const allStudents: any[] = studentsData?.data ?? [];
+  const meta = studentsData?.meta ?? { total: 0, totalPages: 1, page: 1 };
+  // Lọc ra những học sinh chưa trong lớp (client-side vì enrolledIds từ server khác API)
   const availableStudents = allStudents.filter(s => !enrolledIds.has(s.id));
 
   const addMut = useMutation({
@@ -141,42 +148,122 @@ function AddStudentModal({ cls, onClose }: { cls: any; onClose: () => void }) {
     onError: (e: any) => setErr(e.response?.data?.message || "Thêm thất bại"),
   });
 
+  const totalPages = meta.totalPages ?? 1;
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <div>
-            <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>
-              Thêm học sinh vào lớp
-            </h3>
-            <p style={{ fontSize: 12, color: "var(--accent-secondary)", marginTop: 2 }}>{cls.name}</p>
+    <div className="modal-overlay" onClick={onClose}
+      style={{
+        // Override overlay alignment — center vertically, don't clip
+        alignItems: "center",
+        padding: "16px",
+      }}
+    >
+      {/* Modal: fixed height, flex column, override .modal padding */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 460,
+          maxHeight: "min(640px, 88vh)",
+          background: "var(--bg-card)",
+          border: "1px solid var(--border-light)",
+          borderRadius: 20,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          animation: "fadeInUp 0.25s ease",
+          boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
+        }}
+      >
+        {/* ── Sticky Header ── */}
+        <div style={{
+          padding: "20px 24px 0",
+          flexShrink: 0,
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+            <div>
+              <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>
+                Thêm học sinh vào lớp
+              </h3>
+              <p style={{ fontSize: 12, color: "var(--accent-secondary)", marginTop: 3 }}>
+                📚 {cls.name}
+              </p>
+            </div>
+            <button onClick={onClose} className="btn btn-ghost btn-sm" style={{ padding: 6, flexShrink: 0 }}>
+              <X size={16} />
+            </button>
           </div>
-          <button onClick={onClose} className="btn btn-ghost btn-sm" style={{ padding: 6 }}><X size={16} /></button>
+
+          {/* Error */}
+          {err && (
+            <div style={{
+              display: "flex", gap: 8, alignItems: "flex-start",
+              background: "rgba(244,63,94,0.1)", border: "1px solid rgba(244,63,94,0.3)",
+              borderRadius: 8, padding: "9px 12px", marginBottom: 10, fontSize: 12, color: "#f43f5e",
+            }}>
+              <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} /> {err}
+            </div>
+          )}
+
+          {/* Search */}
+          <div style={{ position: "relative", marginBottom: 10 }}>
+            <Search size={13} style={{
+              position: "absolute", left: 10, top: "50%",
+              transform: "translateY(-50%)", color: "var(--text-muted)",
+            }} />
+            <input
+              className="input"
+              placeholder="Tìm tên, email học sinh..."
+              value={search}
+              onChange={(e) => handleSearch(e.target.value)}
+              style={{ paddingLeft: 32, fontSize: 13, height: 38 }}
+              autoFocus
+            />
+          </div>
+
+          {/* Meta info + loading */}
+          <div style={{
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            paddingBottom: 10, borderBottom: "1px solid var(--border)",
+          }}>
+            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+              {meta.total > 0
+                ? <><strong style={{ color: "var(--text-secondary)" }}>{meta.total}</strong> học sinh{search ? ` khớp "${search}"` : ""} · trang {page}/{totalPages}</>
+                : "Không có học sinh"}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {isFetching && (
+                <span style={{ fontSize: 11, color: "var(--accent-secondary)", display: "flex", alignItems: "center", gap: 4 }}>
+                  <Loader2 size={11} className="animate-spin-slow" /> Đang tải
+                </span>
+              )}
+            </div>
+          </div>
         </div>
 
-        {err && (
-          <div style={{ display: "flex", gap: 8, background: "rgba(244,63,94,0.1)", border: "1px solid rgba(244,63,94,0.3)", borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#f43f5e" }}>
-            <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} /> {err}
-          </div>
-        )}
-
-        <div style={{ position: "relative", marginBottom: 14 }}>
-          <Search size={13} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
-          <input className="input" placeholder="Tìm tên, email học sinh..." value={search}
-            onChange={(e) => setSearch(e.target.value)} style={{ paddingLeft: 32, fontSize: 13 }} />
-        </div>
-
-        <div style={{ maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
-          {availableStudents.length === 0 ? (
-            <p style={{ textAlign: "center", padding: "24px 0", color: "var(--text-muted)", fontSize: 13 }}>
-              {search ? "Không tìm thấy kết quả" : "Tất cả học sinh đã trong lớp"}
-            </p>
+        {/* ── Scrollable Student List ── */}
+        <div style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: "10px 24px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}>
+          {availableStudents.length === 0 && !isFetching ? (
+            <div style={{ textAlign: "center", padding: "32px 0", color: "var(--text-muted)" }}>
+              <Users size={36} style={{ margin: "0 auto 10px", opacity: 0.25, display: "block" }} />
+              <p style={{ fontSize: 13 }}>
+                {search ? `Không tìm thấy học sinh khớp "${search}"` : "Tất cả học sinh đã trong lớp"}
+              </p>
+            </div>
           ) : (
             availableStudents.map((s: any) => (
               <div key={s.id} style={{
                 display: "flex", alignItems: "center", gap: 10,
                 padding: "8px 12px", borderRadius: 10,
                 background: "var(--bg-secondary)", border: "1px solid var(--border)",
+                opacity: isFetching ? 0.5 : 1, transition: "opacity 0.15s",
               }}>
                 <div style={{
                   width: 32, height: 32, borderRadius: 8, flexShrink: 0,
@@ -205,13 +292,66 @@ function AddStudentModal({ cls, onClose }: { cls: any; onClose: () => void }) {
           )}
         </div>
 
-        <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
-          <button onClick={onClose} className="btn btn-ghost btn-sm">Đóng</button>
+        {/* ── Sticky Footer: Pagination + Close ── */}
+        <div style={{
+          padding: "10px 24px 18px",
+          borderTop: "1px solid var(--border)",
+          flexShrink: 0,
+          background: "var(--bg-card)",
+        }}>
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 4, marginBottom: 10 }}>
+              <button
+                className="btn btn-ghost btn-sm" style={{ padding: "4px 7px", fontSize: 13 }}
+                disabled={page === 1 || isFetching} onClick={() => setPage(1)} title="Trang đầu"
+              >«</button>
+              <button
+                className="btn btn-ghost btn-sm" style={{ padding: "4px 7px", fontSize: 13 }}
+                disabled={page === 1 || isFetching} onClick={() => setPage(p => p - 1)}
+              >‹</button>
+
+              {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                let p: number;
+                if (totalPages <= 5) { p = i + 1; }
+                else if (page <= 3) { p = i + 1; }
+                else if (page >= totalPages - 2) { p = totalPages - 4 + i; }
+                else { p = page - 2 + i; }
+                return (
+                  <button key={p} onClick={() => setPage(p)} disabled={isFetching}
+                    style={{
+                      minWidth: 30, height: 30, padding: "0 4px", fontSize: 12, borderRadius: 7,
+                      border: p === page ? "none" : "1px solid var(--border)",
+                      background: p === page ? "linear-gradient(135deg, #6366f1, #a855f7)" : "var(--bg-secondary)",
+                      color: p === page ? "#fff" : "var(--text-secondary)",
+                      cursor: "pointer", fontWeight: p === page ? 700 : 400,
+                      boxShadow: p === page ? "0 2px 8px rgba(99,102,241,0.35)" : "none",
+                      transition: "all 0.15s",
+                    }}
+                  >{p}</button>
+                );
+              })}
+
+              <button
+                className="btn btn-ghost btn-sm" style={{ padding: "4px 7px", fontSize: 13 }}
+                disabled={page === totalPages || isFetching} onClick={() => setPage(p => p + 1)}
+              >›</button>
+              <button
+                className="btn btn-ghost btn-sm" style={{ padding: "4px 7px", fontSize: 13 }}
+                disabled={page === totalPages || isFetching} onClick={() => setPage(totalPages)} title="Trang cuối"
+              >»</button>
+            </div>
+          )}
+
+          <button onClick={onClose} className="btn btn-ghost" style={{ width: "100%", fontSize: 13 }}>
+            Đóng
+          </button>
         </div>
       </div>
     </div>
   );
 }
+
 
 /* ─── Class Detail Panel ────────────────────────────────── */
 function ClassDetail({ cls, onBack, teachers }: { cls: any; onBack: () => void; teachers: any[] }) {

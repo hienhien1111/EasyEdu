@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD, APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
+import { BullModule } from '@nestjs/bullmq';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 
 import { PrismaModule } from './database/prisma.module';
@@ -19,6 +20,7 @@ import { SalariesModule } from './modules/salaries/salaries.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { JobsModule } from './jobs/jobs.module';
 
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -38,7 +40,18 @@ import { ResponseTransformInterceptor } from './common/interceptors/response-tra
         limit: 100,     // generous default for non-auth routes
       },
     ]),
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        connection: {
+          host: configService.get<string>('REDIS_HOST', 'localhost'),
+          port: configService.get<number>('REDIS_PORT', 6379),
+          password: configService.get<string>('REDIS_PASSWORD') || undefined,
+        },
+      }),
+    }),
     PrismaModule,
+    JobsModule,
     AuthModule,
     UsersModule,
     ProfilesModule,
